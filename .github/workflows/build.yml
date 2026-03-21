@@ -1,4 +1,4 @@
-name: Certus Kernel Build (Full Automation)
+name: Certus Kernel Build (SukiSU-Ultra Fix)
 
 on:
   workflow_dispatch:
@@ -21,14 +21,14 @@ jobs:
         run: |
           curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
           -d chat_id="${CHAT_ID}" -d parse_mode="HTML" \
-          -d text="🚀 <b>Запуск сборки $DEVICE</b>%0A🛡️ Патч: SukiSU Ultra%0A📦 Пакет: AnyKernel3"
+          -d text="🚀 <b>Запуск сборки $DEVICE</b>%0A🛡️ Интеграция: SukiSU-Ultra (Built-in mode)"
 
       - name: Install Dependencies
         run: |
           sudo apt-get update -y
           sudo apt-get install -y --no-install-recommends \
           build-essential bc bison flex libssl-dev libelf-dev \
-          gcc-arm-linux-gnueabi git zip curl wget tar python3 python2 unzip ca-certificates
+          gcc-arm-linux-gnueabi git zip curl wget tar python3 python-is-python3 unzip ca-certificates
 
       - name: Download Toolchain (Linaro 7.5)
         run: |
@@ -38,16 +38,16 @@ jobs:
 
       - name: Patch with SukiSU Ultra
         run: |
-          echo "💉 Интегрируем SukiSU Ultra..."
+          echo "💉 Интегрируем SukiSU Ultra через официальный скрипт..."
+          # Используем параметр 'builtin' для лучшей совместимости с MTK ядрами
           curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s builtin
 
       - name: Build Kernel
         run: |
           START=$(date +"%s")
           
-          # Исправления для инструментов MTK и Python
-          sudo ln -sf /usr/bin/python3 /usr/bin/python
-          chmod -R +x tools/
+          # Права на инструменты MTK
+          chmod -R +x tools/ || true
           
           export ARCH=arm
           export SUBARCH=arm
@@ -66,40 +66,24 @@ jobs:
             wget -q https://github.com/osm0sis/AnyKernel3/archive/refs/heads/master.zip -O ak3.zip
             unzip -q ak3.zip && mv AnyKernel3-master ak3
             
-            # Базовая настройка AnyKernel (отключаем проверку устройства для теста)
             sed -i 's/do.devicecheck=1/do.devicecheck=0/g' ak3/anykernel.sh
             
-            # Копируем ядро в папку AnyKernel
-            if [ -f out/arch/arm/boot/zImage-dtb ]; then
-                cp out/arch/arm/boot/zImage-dtb ak3/zImage
-            else
-                cp out/arch/arm/boot/zImage ak3/zImage
-            fi
+            # Копируем ядро
+            [ -f out/arch/arm/boot/zImage-dtb ] && cp out/arch/arm/boot/zImage-dtb ak3/zImage || cp out/arch/arm/boot/zImage ak3/zImage
             
-            # Создаем финальный архив
-            cd ak3 && zip -r9 ../${DEVICE}-Kernel-Suki.zip * && cd ..
+            cd ak3 && zip -r9 ../${DEVICE}-SukiSU.zip * && cd ..
             
             curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
             -d chat_id="${CHAT_ID}" -d parse_mode="HTML" \
-            -d text="✅ <b>Ядро собрано!</b>%0A⏳ Время: $((DIFF / 60))м $((DIFF % 60))с"
+            -d text="✅ <b>Готово!</b>⏳ $((DIFF / 60))м $((DIFF % 60))с"
             
-            # Отправка ZIP
-            curl -F chat_id="${CHAT_ID}" -F document=@"${DEVICE}-Kernel-Suki.zip" -F caption="Flashable ZIP (AnyKernel3 + SukiSU)" "https://api.telegram.org/bot${TOKEN}/sendDocument"
-            
-            # Отправка лога в .txt
+            curl -F chat_id="${CHAT_ID}" -F document=@"${DEVICE}-SukiSU.zip" "https://api.telegram.org/bot${TOKEN}/sendDocument"
             cp build.log build_log.txt
             curl -F chat_id="${CHAT_ID}" -F document=@"build_log.txt" "https://api.telegram.org/bot${TOKEN}/sendDocument"
           else
-            # Ошибка сборки
-            cp build.log build_error.log.txt
+            cp build.log build_error.txt
             curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
-            -d chat_id="${CHAT_ID}" -d text="❌ Ошибка при компиляции. Лог прикреплен."
-            curl -F chat_id="${CHAT_ID}" -F document=@"build_error.log.txt" "https://api.telegram.org/bot${TOKEN}/sendDocument"
+            -d chat_id="${CHAT_ID}" -d text="❌ Ошибка сборки."
+            curl -F chat_id="${CHAT_ID}" -F document=@"build_error.txt" "https://api.telegram.org/bot${TOKEN}/sendDocument"
             exit 1
           fi
-
-      - name: Notify on Failure
-        if: failure()
-        run: |
-          curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
-          -d chat_id="${CHAT_ID}" -d text="⚠️ Сборка прервана. Проблема в подготовке окружения или скачивании файлов."
