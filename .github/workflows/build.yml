@@ -1,4 +1,4 @@
-name: Certus Kernel Build (ARM 32-bit)
+name: Certus Kernel Build (SukiSU + AnyKernel3)
 
 on:
   workflow_dispatch:
@@ -20,7 +20,7 @@ jobs:
       - name: Notify Start
         run: |
           curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
-          -d chat_id="${CHAT_ID}" -d parse_mode="HTML" -d text="🚀 <b>Запуск сборки $DEVICE (32-bit)</b>"
+          -d chat_id="${CHAT_ID}" -d parse_mode="HTML" -d text="🚀 <b>Запуск сборки $DEVICE</b>%0A🛡️ Патч: SukiSU Ultra%0A📦 Пакет: AnyKernel3"
 
       - name: Install Dependencies
         run: |
@@ -35,49 +35,64 @@ jobs:
           wget -q https://releases.linaro.org/components/toolchain/binaries/7.5-2019.12/arm-linux-gnueabi/gcc-linaro-7.5.0-2019.12-x86_64_arm-linux-gnueabi.tar.xz
           tar -xf gcc-linaro-7.5.0-2019.12-x86_64_arm-linux-gnueabi.tar.xz -C tc32 --strip-components=1
 
+      - name: Patch with SukiSU Ultra
+        run: |
+          echo "💉 Применяем патчи SukiSU Ultra..."
+          git clone https://github.com/SukiDevs/SukiSU_Ultra.git suki
+          chmod +x suki/patch.sh
+          # Запускаем патчер (убедись, что путь к ядру верный, обычно это корень '.')
+          ./suki/patch.sh . 
+
       - name: Build Kernel
         run: |
           START=$(date +"%s")
-          
-          # 1. Исправляем "DrvGen.py: not found"
-          # Делаем python3 основным (если скрипт современный)
           sudo ln -sf /usr/bin/python3 /usr/bin/python
-          # Даем права на исполнение всем инструментам в папке tools
           chmod -R +x tools/
           
-          # 2. Окружение
           export ARCH=arm
           export SUBARCH=arm
           export CROSS_COMPILE=$(pwd)/tc32/bin/arm-linux-gnueabi-
           export KCPPFLAGS="-D_GNU_SOURCE"
-          # Добавляем пути к инструментам MTK в PATH
           export PATH=$(pwd)/tools/dct:$PATH
 
-          # 3. Сама сборка
           mkdir -p out
           make O=out $DEFCONFIG
           
           if make -j$(nproc --all) O=out 2>&1 | tee build.log; then
             END=$(date +"%s")
             DIFF=$((END - START))
-            K_VER=$(make O=out kernelversion)
             
-            # Успех
+            # Подготовка AnyKernel3
+            echo "📦 Упаковка в AnyKernel3..."
+            git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git ak3
+            # Удаляем лишнее из AnyKernel3
+            rm -rf ak3/.git ak3/README.md
+            
+            # Копируем собранное ядро (zImage или zImage-dtb)
+            if [ -f out/arch/arm/boot/zImage-dtb ]; then
+                cp out/arch/arm/boot/zImage-dtb ak3/zImage
+            elif [ -f out/arch/arm/boot/zImage ]; then
+                cp out/arch/arm/boot/zImage ak3/zImage
+            fi
+            
+            # Создаем ZIP
+            cd ak3 && zip -r9 ../${DEVICE}-Kernel.zip * && cd ..
+            
+            # Успешное уведомление
             curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
             -d chat_id="${CHAT_ID}" -d parse_mode="HTML" \
-            -d text="✅ <b>Готово!</b>%0A📋 $K_VER%0A⏳ $((DIFF / 60))м $((DIFF % 60))с"
+            -d text="✅ <b>Сборка завершена!</b>%0A⏳ Время: $((DIFF / 60))м $((DIFF % 60))с"
             
-            # Отправка ядра
-            find out/arch/arm/boot -name "*Image*" -type f -exec curl -F chat_id="${CHAT_ID}" -F document=@{} "https://api.telegram.org/bot${TOKEN}/sendDocument" \;
+            # Отправка готового архива
+            curl -F chat_id="${CHAT_ID}" -F document=@"${DEVICE}-Kernel.zip" -F caption="AnyKernel3 Flashable ZIP" "https://api.telegram.org/bot${TOKEN}/sendDocument"
             
-            # Отправка лога как .txt
+            # Отправка лога в .txt
             cp build.log build_log.txt
-            curl -F chat_id="${CHAT_ID}" -F document=@"build_log.txt" -F caption="Лог успешной сборки" "https://api.telegram.org/bot${TOKEN}/sendDocument"
+            curl -F chat_id="${CHAT_ID}" -F document=@"build_log.txt" "https://api.telegram.org/bot${TOKEN}/sendDocument"
           else
-            # Ошибка
             cp build.log build_error_log.txt
             curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
-            -d chat_id="${CHAT_ID}" -d text="❌ Ошибка при компиляции. Лог ниже."
+            -d chat_id="${CHAT_ID}" -d text="❌ Ошибка компиляции."
             curl -F chat_id="${CHAT_ID}" -F document=@"build_error_log.txt" "https://api.telegram.org/bot${TOKEN}/sendDocument"
             exit 1
           fi
@@ -86,4 +101,4 @@ jobs:
         if: failure()
         run: |
           curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
-          -d chat_id="${CHAT_ID}" -d text="⚠️ Воркфлоу прерван на раннем этапе (зависимости или тулчейн)."
+          -d chat_id="${CHAT_ID}" -d text="⚠️ Воркфлоу упал на этапе подготовки."
