@@ -38,11 +38,8 @@ jobs:
 
       - name: Patch with SukiSU Ultra
         run: |
-          echo "💉 Применяем патчи SukiSU Ultra..."
-          git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra.git suki
-          chmod +x suki/patch.sh
-          # Запускаем патчер (убедись, что путь к ядру верный, обычно это корень '.')
-          ./suki/patch.sh .
+          echo "💉 Интегрируем SukiSU Ultra..."
+          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s builtin
 
       - name: Build Kernel
         run: |
