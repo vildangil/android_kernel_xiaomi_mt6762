@@ -39,12 +39,9 @@ jobs:
       - name: Patch with SukiSU Ultra
         run: |
           echo "💉 Применяем патчи SukiSU Ultra..."
-          # Загружаем через wget, чтобы избежать ошибок авторизации Git
-          wget -q https://github.com/SukiDevs/SukiSU_Ultra/archive/refs/heads/main.zip -O suki.zip || \
-          wget -q https://github.com/SukiDevs/SukiSU_Ultra/archive/refs/heads/master.zip -O suki.zip
-          
-          unzip -q suki.zip && mv SukiSU_Ultra-* suki
+          git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra.git suki
           chmod +x suki/patch.sh
+          # Запускаем патчер (убедись, что путь к ядру верный, обычно это корень '.')
           ./suki/patch.sh .
 
       - name: Build Kernel
