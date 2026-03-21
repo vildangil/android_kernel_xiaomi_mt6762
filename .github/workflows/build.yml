@@ -1,4 +1,4 @@
-name: Certus Kernel Build (SukiSU-Ultra Fix)
+name: Certus Kernel Build (Final Fix)
 
 on:
   workflow_dispatch:
@@ -21,7 +21,7 @@ jobs:
         run: |
           curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
           -d chat_id="${CHAT_ID}" -d parse_mode="HTML" \
-          -d text="🚀 <b>Запуск сборки $DEVICE</b>%0A🛡️ Интеграция: SukiSU-Ultra (Built-in mode)"
+          -d text="🚀 <b>Запуск сборки $DEVICE</b>%0A🛠 Тулчейн: Linaro 7.5%0A🛡️ Патч: SukiSU-Ultra"
 
       - name: Install Dependencies
         run: |
@@ -30,7 +30,7 @@ jobs:
           build-essential bc bison flex libssl-dev libelf-dev \
           gcc-arm-linux-gnueabi git zip curl wget tar python3 python-is-python3 unzip ca-certificates
 
-      - name: Download Toolchain (Linaro 7.5)
+      - name: Download Toolchain
         run: |
           mkdir -p tc32
           wget -q https://releases.linaro.org/components/toolchain/binaries/7.5-2019.12/arm-linux-gnueabi/gcc-linaro-7.5.0-2019.12-x86_64_arm-linux-gnueabi.tar.xz
@@ -38,22 +38,25 @@ jobs:
 
       - name: Patch with SukiSU Ultra
         run: |
-          echo "💉 Интегрируем SukiSU Ultra через официальный скрипт..."
-          # Используем параметр 'builtin' для лучшей совместимости с MTK ядрами
+          echo "💉 Интегрируем SukiSU Ultra..."
           curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s builtin
 
       - name: Build Kernel
         run: |
           START=$(date +"%s")
           
-          # Права на инструменты MTK
-          chmod -R +x tools/ || true
+          # Глубокое исправление прав для инструментов MTK
+          echo "🔧 Исправляем права для drvgen..."
+          find tools -type f -name "*.py" -exec chmod +x {} +
+          find tools -type f -name "drvgen*" -exec chmod +x {} +
+          chmod -R +x tools/dct/ || true
           
           export ARCH=arm
           export SUBARCH=arm
           export CROSS_COMPILE=$(pwd)/tc32/bin/arm-linux-gnueabi-
           export KCPPFLAGS="-D_GNU_SOURCE"
-          export PATH=$(pwd)/tools/dct:$PATH
+          # Добавляем все возможные пути MTK в PATH
+          export PATH=$(pwd)/tools/dct:$(pwd)/tools/dct/drvgen:$PATH
 
           mkdir -p out
           make O=out $DEFCONFIG
@@ -68,22 +71,33 @@ jobs:
             
             sed -i 's/do.devicecheck=1/do.devicecheck=0/g' ak3/anykernel.sh
             
-            # Копируем ядро
-            [ -f out/arch/arm/boot/zImage-dtb ] && cp out/arch/arm/boot/zImage-dtb ak3/zImage || cp out/arch/arm/boot/zImage ak3/zImage
+            # Поиск ядра
+            if [ -f out/arch/arm/boot/zImage-dtb ]; then
+                cp out/arch/arm/boot/zImage-dtb ak3/zImage
+            else
+                cp out/arch/arm/boot/zImage ak3/zImage
+            fi
             
-            cd ak3 && zip -r9 ../${DEVICE}-SukiSU.zip * && cd ..
+            cd ak3 && zip -r9 ../${DEVICE}-SukiSU-Build.zip * && cd ..
             
             curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
             -d chat_id="${CHAT_ID}" -d parse_mode="HTML" \
-            -d text="✅ <b>Готово!</b>⏳ $((DIFF / 60))м $((DIFF % 60))с"
+            -d text="✅ <b>Сборка успешно завершена!</b>%0A⏳ Время: $((DIFF / 60))м $((DIFF % 60))с"
             
-            curl -F chat_id="${CHAT_ID}" -F document=@"${DEVICE}-SukiSU.zip" "https://api.telegram.org/bot${TOKEN}/sendDocument"
+            curl -F chat_id="${CHAT_ID}" -F document=@"${DEVICE}-SukiSU-Build.zip" "https://api.telegram.org/bot${TOKEN}/sendDocument"
+            
             cp build.log build_log.txt
             curl -F chat_id="${CHAT_ID}" -F document=@"build_log.txt" "https://api.telegram.org/bot${TOKEN}/sendDocument"
           else
             cp build.log build_error.txt
             curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
-            -d chat_id="${CHAT_ID}" -d text="❌ Ошибка сборки."
+            -d chat_id="${CHAT_ID}" -d text="❌ Ошибка компиляции ядра."
             curl -F chat_id="${CHAT_ID}" -F document=@"build_error.txt" "https://api.telegram.org/bot${TOKEN}/sendDocument"
             exit 1
           fi
+
+      - name: Notify on Failure
+        if: failure()
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+          -d chat_id="${CHAT_ID}" -d text="⚠️ Воркфлоу упал на этапе подготовки окружения."
