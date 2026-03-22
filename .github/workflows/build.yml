@@ -1,4 +1,4 @@
-name: Certus Kernel Build (SukiSU 3.2.0 + Boot Path Fix)
+name: Certus Kernel Build (ARM 32-bit)
 
 on:
   workflow_dispatch:
@@ -21,14 +21,14 @@ jobs:
         run: |
           curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
           -d chat_id="${CHAT_ID}" -d parse_mode="HTML" \
-          -d text="🚀 <b>Запуск сборки $DEVICE</b>%0A🛡️ SukiSU Ultra: 3.2.0%0A📍 Путь: /dev/block/by-name/boot"
+          -d text="🚀 <b>Запуск сборки $DEVICE (32-bit)</b>%0A🛡️ SukiSU: v3.2.0%0A📍 AK3: /dev/block/by-name/boot"
 
       - name: Install Dependencies
         run: |
           sudo apt-get update -y
           sudo apt-get install -y --no-install-recommends \
           build-essential bc bison flex libssl-dev libelf-dev \
-          gcc-arm-linux-gnueabi git zip curl wget tar python3 python-is-python3 unzip ca-certificates
+          gcc-arm-linux-gnueabi git zip curl wget tar python3 python2 unzip ca-certificates
 
       - name: Download Toolchain
         run: |
@@ -36,66 +36,80 @@ jobs:
           wget -q https://releases.linaro.org/components/toolchain/binaries/7.5-2019.12/arm-linux-gnueabi/gcc-linaro-7.5.0-2019.12-x86_64_arm-linux-gnueabi.tar.xz
           tar -xf gcc-linaro-7.5.0-2019.12-x86_64_arm-linux-gnueabi.tar.xz -C tc32 --strip-components=1
 
-      - name: Patch with SukiSU Ultra 3.2.0
+      - name: Patch SukiSU Ultra 3.2.0
         run: |
-          echo "💉 Интегрируем SukiSU Ultra версии 3.2.0..."
-          # Скрипт качаем из main, а ему передаем нужный тег (скорее всего v3.2.0)
+          echo "💉 Интегрируем SukiSU Ultra v3.2.0..."
+          # Качаем из main, чтобы избежать 404, и ставим тег v3.2.0
           curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s v3.2.0
 
       - name: Build Kernel
         run: |
           START=$(date +"%s")
           
-          # Фикс путей для MTK
-          CURRENT_DIR=$(pwd)
-          ln -s "$CURRENT_DIR/tools" "$CURRENT_DIR/../tools" || true
-          chmod -R +x tools/
+          # 1. Исправляем "DrvGen.py: not found"
+          # Делаем python3 основным (если скрипт современный)
           sudo ln -sf /usr/bin/python3 /usr/bin/python
+          # Даем права на исполнение всем инструментам в папке tools
+          chmod -R +x tools/
           
+          # 2. Окружение
           export ARCH=arm
           export SUBARCH=arm
-          export CROSS_COMPILE="$CURRENT_DIR/tc32/bin/arm-linux-gnueabi-"
+          export CROSS_COMPILE=$(pwd)/tc32/bin/arm-linux-gnueabi-
           export KCPPFLAGS="-D_GNU_SOURCE"
-          export PATH="$CURRENT_DIR/tools/dct:$PATH"
+          # Добавляем пути к инструментам MTK в PATH
+          export PATH=$(pwd)/tools/dct:$PATH
 
+          # 3. Сама сборка
           mkdir -p out
           make O=out $DEFCONFIG
           
           if make -j$(nproc --all) O=out 2>&1 | tee build.log; then
             END=$(date +"%s")
             DIFF=$((END - START))
+            K_VER=$(make O=out kernelversion)
             
+            # Успех
+            curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+            -d chat_id="${CHAT_ID}" -d parse_mode="HTML" \
+            -d text="✅ <b>Готово!</b>%0A📋 $K_VER%0A⏳ $((DIFF / 60))м $((DIFF % 60))с"
+            
+            # 4. Упаковка в AnyKernel3
             echo "📦 Настройка AnyKernel3..."
             wget -q https://github.com/osm0sis/AnyKernel3/archive/refs/heads/master.zip -O ak3.zip
             unzip -q ak3.zip && mv AnyKernel3-master ak3
             
             # ИСПРАВЛЕНИЕ ПУТИ И КОНФИГА ANYKERNEL
             sed -i 's/do.devicecheck=1/do.devicecheck=0/g' ak3/anykernel.sh
-            # Указываем точный путь к разделу boot
             sed -i 's|block=/dev/block/platform/.*/by-name/boot;|block=/dev/block/by-name/boot;|g' ak3/anykernel.sh
-            # Если в шаблоне строка выглядит иначе, принудительно заменяем переменную block
             sed -i 's|^block=.*;|block=/dev/block/by-name/boot;|g' ak3/anykernel.sh
-
+            
             # Копируем ядро
             if [ -f out/arch/arm/boot/zImage-dtb ]; then
                 cp out/arch/arm/boot/zImage-dtb ak3/zImage
-            else
+            elif [ -f out/arch/arm/boot/zImage ]; then
                 cp out/arch/arm/boot/zImage ak3/zImage
             fi
             
             cd ak3 && zip -r9 ../${DEVICE}-Suki-3.2.0.zip * && cd ..
             
-            curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
-            -d chat_id="${CHAT_ID}" -d parse_mode="HTML" \
-            -d text="✅ <b>Сборка готова!</b>%0A🛡️ SukiSU 3.2.0 интегрирован.%0A⏳ Время: $((DIFF / 60))м"
-            
+            # Отправка ядра
             curl -F chat_id="${CHAT_ID}" -F document=@"${DEVICE}-Suki-3.2.0.zip" "https://api.telegram.org/bot${TOKEN}/sendDocument"
+            
+            # Отправка лога как .txt
             cp build.log build_log.txt
-            curl -F chat_id="${CHAT_ID}" -F document=@"build_log.txt" "https://api.telegram.org/bot${TOKEN}/sendDocument"
+            curl -F chat_id="${CHAT_ID}" -F document=@"build_log.txt" -F caption="Лог успешной сборки" "https://api.telegram.org/bot${TOKEN}/sendDocument"
           else
-            cp build.log build_err.txt
+            # Ошибка
+            cp build.log build_error_log.txt
             curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
-            -d chat_id="${CHAT_ID}" -d text="❌ Ошибка сборки."
-            curl -F chat_id="${CHAT_ID}" -F document=@"build_err.txt" "https://api.telegram.org/bot${TOKEN}/sendDocument"
+            -d chat_id="${CHAT_ID}" -d text="❌ Ошибка при компиляции. Лог ниже."
+            curl -F chat_id="${CHAT_ID}" -F document=@"build_error_log.txt" "https://api.telegram.org/bot${TOKEN}/sendDocument"
             exit 1
           fi
+
+      - name: Notify on Failure
+        if: failure()
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+          -d chat_id="${CHAT_ID}" -d text="⚠️ Воркфлоу прерван на раннем этапе (зависимости или тулчейн)."
