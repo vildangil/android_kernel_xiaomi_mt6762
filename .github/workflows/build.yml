@@ -44,42 +44,41 @@ jobs:
 
       - name: Build Kernel
         run: |
-          # Останавливаем выполнение при любой ошибке
           set -e
-          
           START=$(date +"%s")
           
-          # 1. Исправления для инструментов (DrvGen и python)
+          # 1. Инструменты
           sudo ln -sf /usr/bin/python3 /usr/bin/python
           chmod -R +x tools/
           
-          # 2. ПЕРЕИМЕНОВАНИЕ И НАСТРОЙКА КОНФИГА
+          # 2. НАСТРОЙКА КОНФИГА
           CONF_PATH=arch/arm/configs/${{ env.DEFCONFIG }}
-          
-          # Меняем имя ядра на SukaKernel
-          # Используем sed, чтобы заменить, если параметр уже есть, или добавить, если нет
-          if grep -q "CONFIG_LOCALVERSION=" $CONF_PATH; then
-            sed -i 's/CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION="-SukaKernel"/g' $CONF_PATH
-          else
-            echo 'CONFIG_LOCALVERSION="-SukaKernel"' >> $CONF_PATH
-          fi
-          
-          # Включаем KSU и зависимости (Tracepoints обязательны для SukiSU)
+          # Переименовываем
+          sed -i 's/CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION="-SukaKernel"/g' $CONF_PATH || echo 'CONFIG_LOCALVERSION="-SukaKernel"' >> $CONF_PATH
+          # Включаем KSU
           echo "CONFIG_KSU=y" >> $CONF_PATH
           echo "CONFIG_TRACEPOINTS=y" >> $CONF_PATH
           echo "CONFIG_STAGING=y" >> $CONF_PATH
           
-          # 3. ИНТЕГРАЦИЯ SUKISU (через скрипт, это надежнее веток)
-          echo "💉 Интегрируем SukiSU Ultra..."
-          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s main
+          # 3. РУЧНАЯ ИНТЕГРАЦИЯ SUKISU (самый надежный способ)
+          echo "💉 Загрузка SukiSU Ultra..."
+          mkdir -p drivers/kernelsu
+          # Скачиваем архив напрямую с GitHub (ветка main)
+          curl -L https://github.com/SukiSU-Ultra/SukiSU-Ultra/archive/refs/heads/main.zip -o suki.zip
+          unzip -q suki.zip
+          # Копируем содержимое папки kernel в drivers/kernelsu
+          cp -r SukiSU-Ultra-main/kernel/* drivers/kernelsu/
           
-          # 4. ХАК ДЛЯ ЯДРА 4.9 (Убираем MODULE_IMPORT_NS)
-          # Этот макрос появился в новых ядрах, в 4.9 его нет, и он вызывает ошибку
-          if [ -f drivers/kernelsu/ksu.c ]; then
-            echo "🛠️ Исправляем несовместимость ksu.c с ядром 4.9..."
-            sed -i 's/MODULE_IMPORT_NS.*//g' drivers/kernelsu/ksu.c
+          # Интегрируем в Makefile ядра, если еще не добавлено
+          if ! grep -q "kernelsu" drivers/Makefile; then
+            echo "obj-y += kernelsu/" >> drivers/Makefile
           fi
-
+          
+          # 4. ХАК ДЛЯ ЯДРА 4.9 (Удаляем несовместимый код)
+          echo "🛠️ Применяем патчи совместимости для ядра 4.9..."
+          # Удаляем MODULE_IMPORT_NS, который ломает сборку на старых ядрах
+          find drivers/kernelsu/ -name "*.c" -exec sed -i 's/MODULE_IMPORT_NS.*//g' {} +
+          
           # 5. ОКРУЖЕНИЕ
           export ARCH=arm
           export SUBARCH=arm
@@ -90,36 +89,28 @@ jobs:
           # 6. СБОРКА
           mkdir -p out
           make O=out $DEFCONFIG
-          
-          # Сама компиляция с записью лога
+          # Сборка в 4 потока для стабильности памяти
           make -j4 O=out 2>&1 | tee build.log || (tail -n 100 build.log && exit 1)
           
           END=$(date +"%s")
           DIFF=$((END - START))
           K_VER=$(make O=out kernelversion)
           
-          # Уведомление об успехе
+          # ТГ Уведомление
           curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
           -d chat_id="${CHAT_ID}" -d parse_mode="HTML" \
-          -d text="✅ <b>Готово!</b>%0A📋 $K_VER%0A⏳ $((DIFF / 60))м $((DIFF % 60))с"
+          -d text="✅ <b>Ядро собрано!</b>%0A📋 $K_VER%0A⏳ $((DIFF / 60))м $((DIFF % 60))с"
           
-          # 7. УПАКОВКА В ANYKERNEL3
+          # 7. УПАКОВКА
           wget -q https://github.com/osm0sis/AnyKernel3/archive/refs/heads/master.zip -O ak3.zip
           unzip -q ak3.zip && mv AnyKernel3-master ak3
-          
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' ak3/anykernel.sh
           sed -i 's|^block=.*;|block=/dev/block/by-name/boot;|g' ak3/anykernel.sh
           
-          # Копируем результат (пробуем разные варианты имени файла)
-          if [ -f out/arch/arm/boot/zImage-dtb ]; then
-              cp out/arch/arm/boot/zImage-dtb ak3/zImage
-          else
-              cp out/arch/arm/boot/zImage ak3/zImage
-          fi
+          cp out/arch/arm/boot/zImage* ak3/zImage || cp out/arch/arm/boot/Image* ak3/zImage
           
           cd ak3 && zip -r9 ../${DEVICE}-SukaKernel.zip * && cd ..
           
-          # Отправка прошивки и лога
           curl -F chat_id="${CHAT_ID}" -F document=@"${DEVICE}-SukaKernel.zip" "https://api.telegram.org/bot${TOKEN}/sendDocument"
           cp build.log build_log.txt
           curl -F chat_id="${CHAT_ID}" -F document=@"build_log.txt" "https://api.telegram.org/bot${TOKEN}/sendDocument"
