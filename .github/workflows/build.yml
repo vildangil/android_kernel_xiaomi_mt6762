@@ -64,7 +64,7 @@ jobs:
             echo "$opt=y" >> $CONF_PATH
           done
           
-          # 3. ИНТЕГРАЦИЯ SUKISU (Метод "Спецназ" — сработает в любом случае)
+          # 3. ИНТЕГРАЦИЯ SUKISU
           echo "💉 Загрузка SukiSU Ultra..."
           curl -L https://github.com/SukiSU-Ultra/SukiSU-Ultra/archive/refs/heads/main.zip -o suki.zip
           unzip -q suki.zip
@@ -77,15 +77,26 @@ jobs:
             echo "obj-y += kernelsu/" >> drivers/Makefile
           fi
           
-          # 4. ФИКСЫ СОВМЕСТИМОСТИ С ЯДРОМ 4.9
+          # 4. ЖЕСТКИЕ ФИКСЫ ДЛЯ ЯДРА 4.9
           echo "🛠️ Применяем патчи для 4.9..."
+          # Выключаем строгую проверку ошибок (превращение warning в error)
+          sed -i 's/-Werror//g' drivers/kernelsu/Makefile || true
+          
           # Фикс 1: Убираем MODULE_IMPORT_NS
           find drivers/kernelsu/ -type f -name "*.c" -exec sed -i 's/MODULE_IMPORT_NS.*//g' {} +
+          
           # Фикс 2: Исправляем ошибку unknown type name ‘syscall_fn_t’
           if [ -f drivers/kernelsu/syscall_hook.h ]; then
             sed -i 's/syscall_fn_t/void*/g' drivers/kernelsu/syscall_hook.h
           fi
           
+          # Фикс 3: Принудительное приведение типов для kernel_write
+          # Меняем kernel_write(fp, &variable, ...) на kernel_write(fp, (const char *)&variable, ...)
+          sed -i 's/kernel_write(\([^,]*\), &\([^,]*\)/kernel_write(\1, (const char *)\&\2/g' drivers/kernelsu/allowlist.c || true
+          
+          # Фикс 4: Удаляем параметр TWA_RESUME из task_work_add, так как в 4.9 эта функция принимает только два аргумента
+          sed -i 's/, TWA_RESUME//g' drivers/kernelsu/allowlist.c || true
+
           # 5. ОКРУЖЕНИЕ
           export ARCH=arm
           export SUBARCH=arm
@@ -100,7 +111,7 @@ jobs:
           echo "🚀 Начинаем компиляцию..."
           if ! make -j4 O=out 2>&1 | tee build.log; then
             echo "❌ ОШИБКА СБОРКИ! Последние строки:"
-            tail -n 50 build.log
+            tail -n 60 build.log
             exit 1
           fi
           
@@ -115,7 +126,7 @@ jobs:
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' ak3/anykernel.sh
           sed -i 's|^block=.*;|block=/dev/block/by-name/boot;|g' ak3/anykernel.sh
           
-          # Ищем ядро (zImage или zImage-dtb)
+          # Ищем ядро
           if [ -f out/arch/arm/boot/zImage-dtb ]; then
             cp out/arch/arm/boot/zImage-dtb ak3/zImage
           else
