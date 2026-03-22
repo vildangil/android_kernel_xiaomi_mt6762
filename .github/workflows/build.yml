@@ -39,8 +39,8 @@ jobs:
       - name: Patch with SukiSU Ultra 3.2.0
         run: |
           echo "💉 Интегрируем SukiSU Ultra версии 3.2.0..."
-          # Скачиваем установщик конкретно ветки/тега 3.2.0
-          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/3.2.0/kernel/setup.sh" | bash -s 3.2.0
+          # Скрипт качаем из main, а ему передаем нужный тег (скорее всего v3.2.0)
+          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s v3.2.0
 
       - name: Build Kernel
         run: |
