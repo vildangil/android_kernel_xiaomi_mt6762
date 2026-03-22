@@ -47,69 +47,91 @@ jobs:
           set -e
           START=$(date +"%s")
           
-          # 1. Инструменты
+          # 1. Подготовка инструментов
           sudo ln -sf /usr/bin/python3 /usr/bin/python
           chmod -R +x tools/
           
-          # 2. НАСТРОЙКА КОНФИГА
+          # 2. Настройка конфигурации (ARCH=arm)
           CONF_PATH=arch/arm/configs/${{ env.DEFCONFIG }}
-          # Переименовываем
-          sed -i 's/CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION="-SukaKernel"/g' $CONF_PATH || echo 'CONFIG_LOCALVERSION="-SukaKernel"' >> $CONF_PATH
-          # Включаем KSU
-          echo "CONFIG_KSU=y" >> $CONF_PATH
-          echo "CONFIG_TRACEPOINTS=y" >> $CONF_PATH
-          echo "CONFIG_STAGING=y" >> $CONF_PATH
           
-          # 3. РУЧНАЯ ИНТЕГРАЦИЯ SUKISU (самый надежный способ)
-          echo "💉 Загрузка SukiSU Ultra..."
-          mkdir -p drivers/kernelsu
-          # Скачиваем архив напрямую с GitHub (ветка main)
+          # Удаляем старый LOCALVERSION и пишем новый
+          sed -i '/CONFIG_LOCALVERSION=/d' $CONF_PATH
+          echo 'CONFIG_LOCALVERSION="-SukaKernel"' >> $CONF_PATH
+          
+          # Включаем необходимые опции для работы SU
+          for opt in CONFIG_KSU CONFIG_TRACEPOINTS CONFIG_STAGING; do
+            sed -i "/$opt=/d" $CONF_PATH
+            echo "$opt=y" >> $CONF_PATH
+          done
+          
+          # 3. Интеграция SukiSU (Метод прямой загрузки)
+          echo "💉 Загрузка и подготовка SukiSU..."
           curl -L https://github.com/SukiSU-Ultra/SukiSU-Ultra/archive/refs/heads/main.zip -o suki.zip
-          unzip -q suki.zip
-          # Копируем содержимое папки kernel в drivers/kernelsu
-          cp -r SukiSU-Ultra-main/kernel/* drivers/kernelsu/
           
-          # Интегрируем в Makefile ядра, если еще не добавлено
+          if [ ! -f suki.zip ]; then
+            echo "❌ Ошибка: Не удалось скачать SukiSU!"
+            exit 1
+          fi
+          
+          unzip -q suki.zip
+          # Ищем папку с исходниками, как бы она ни называлась
+          SUKI_DIR=$(find . -maxdepth 1 -type d -name "SukiSU-Ultra*" | head -n 1)
+          
+          mkdir -p drivers/kernelsu
+          cp -r $SUKI_DIR/kernel/* drivers/kernelsu/
+          
+          # Прописываем в Makefile драйверов
           if ! grep -q "kernelsu" drivers/Makefile; then
             echo "obj-y += kernelsu/" >> drivers/Makefile
           fi
           
-          # 4. ХАК ДЛЯ ЯДРА 4.9 (Удаляем несовместимый код)
-          echo "🛠️ Применяем патчи совместимости для ядра 4.9..."
-          # Удаляем MODULE_IMPORT_NS, который ломает сборку на старых ядрах
+          # 4. Патчи совместимости для ядра 4.9 (arm)
+          echo "🛠️ Удаление несовместимого кода MODULE_IMPORT_NS..."
           find drivers/kernelsu/ -name "*.c" -exec sed -i 's/MODULE_IMPORT_NS.*//g' {} +
           
-          # 5. ОКРУЖЕНИЕ
+          # 5. Переменные окружения
           export ARCH=arm
           export SUBARCH=arm
           export CROSS_COMPILE=$(pwd)/tc32/bin/arm-linux-gnueabi-
           export KCPPFLAGS="-D_GNU_SOURCE"
           export PATH=$(pwd)/tools/dct:$PATH
 
-          # 6. СБОРКА
+          # 6. Процесс компиляции
           mkdir -p out
           make O=out $DEFCONFIG
-          # Сборка в 4 потока для стабильности памяти
-          make -j4 O=out 2>&1 | tee build.log || (tail -n 100 build.log && exit 1)
+          
+          # Собираем в 4 потока. Если упадет — выводим хвост лога.
+          if ! make -j4 O=out 2>&1 | tee build.log; then
+            echo "❌ Ошибка компиляции! Последние строки лога:"
+            tail -n 100 build.log
+            exit 1
+          fi
           
           END=$(date +"%s")
           DIFF=$((END - START))
           K_VER=$(make O=out kernelversion)
           
-          # ТГ Уведомление
-          curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
-          -d chat_id="${CHAT_ID}" -d parse_mode="HTML" \
-          -d text="✅ <b>Ядро собрано!</b>%0A📋 $K_VER%0A⏳ $((DIFF / 60))м $((DIFF % 60))с"
-          
-          # 7. УПАКОВКА
+          # 7. Упаковка
+          echo "📦 Сборка AnyKernel3..."
           wget -q https://github.com/osm0sis/AnyKernel3/archive/refs/heads/master.zip -O ak3.zip
           unzip -q ak3.zip && mv AnyKernel3-master ak3
+          
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' ak3/anykernel.sh
           sed -i 's|^block=.*;|block=/dev/block/by-name/boot;|g' ak3/anykernel.sh
           
-          cp out/arch/arm/boot/zImage* ak3/zImage || cp out/arch/arm/boot/Image* ak3/zImage
+          # Копируем ядро (zImage для arm)
+          if [ -f out/arch/arm/boot/zImage-dtb ]; then
+            cp out/arch/arm/boot/zImage-dtb ak3/zImage
+          else
+            cp out/arch/arm/boot/zImage ak3/zImage
+          fi
           
           cd ak3 && zip -r9 ../${DEVICE}-SukaKernel.zip * && cd ..
+          
+          # 8. Отправка в Telegram
+          curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+          -d chat_id="${CHAT_ID}" -d parse_mode="HTML" \
+          -d text="✅ <b>Ядро готово!</b>%0A📋 Версия: $K_VER%0A⏳ Время сборки: $((DIFF / 60))м $((DIFF % 60))с"
           
           curl -F chat_id="${CHAT_ID}" -F document=@"${DEVICE}-SukaKernel.zip" "https://api.telegram.org/bot${TOKEN}/sendDocument"
           cp build.log build_log.txt
