@@ -92,7 +92,7 @@ jobs:
           make O=out $DEFCONFIG
           
           # Сама компиляция с записью лога
-          make -j$(nproc --all) O=out 2>&1 | tee build.log
+          make -j4 O=out 2>&1 | tee build.log || (tail -n 100 build.log && exit 1)
           
           END=$(date +"%s")
           DIFF=$((END - START))
