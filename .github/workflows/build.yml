@@ -44,39 +44,80 @@ jobs:
 
       - name: Build Kernel
         run: |
+          # Включаем строгую проверку ошибок (чтобы скрипт падал, если компиляция не удалась)
+          set -e
+          set -o pipefail
+          
           START=$(date +"%s")
           
           # 1. Исправления для инструментов
           sudo ln -sf /usr/bin/python3 /usr/bin/python
           chmod -R +x tools/
           
-          # 2. ПЕРЕИМЕНОВАНИЕ И ВКЛЮЧЕНИЕ SUKISU
-          # Путь к твоему дефконфигу (раз ARCH=arm)
+          # 2. ПЕРЕИМЕНОВАНИЕ И ПОДГОТОВКА КОНФИГА
           CONF_PATH=arch/arm/configs/${{ env.DEFCONFIG }}
           
-          # Устанавливаем имя ядра (добавится в конец версии)
-          # Важно: имя должно начинаться с дефиса и не содержать пробелов
+          # Устанавливаем имя ядра
           echo 'CONFIG_LOCALVERSION="-SukaKernel"' >> $CONF_PATH
-          
-          # Принудительно включаем поддержку SukiSU в конфиге
+          # Принудительно включаем KSU и нужные зависимости
           echo "CONFIG_KSU=y" >> $CONF_PATH
-          # Для работы хуков SukiSU на старых ядрах часто нужны эти параметры:
           echo "CONFIG_TRACEPOINTS=y" >> $CONF_PATH
           echo "CONFIG_STAGING=y" >> $CONF_PATH
           
-          # 3. Окружение
+          # 3. Интеграция SukiSU v3.2.0 (через прямое клонирование для надежности)
+          echo "💉 Установка SukiSU Ultra v3.2.0..."
+          git clone --branch v3.2.0 https://github.com/SukiSU-Ultra/SukiSU-Ultra suki_src
+          cd suki_src/kernel
+          bash setup.sh
+          cd ../..
+          
+          # ХАК: Исправляем ошибку MODULE_IMPORT_NS для ядра 4.9
+          if [ -f drivers/kernelsu/ksu.c ]; then
+            sed -i 's/MODULE_IMPORT_NS(VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver);//g' drivers/kernelsu/ksu.c
+          fi
+
+          # 4. Окружение
           export ARCH=arm
           export SUBARCH=arm
           export CROSS_COMPILE=$(pwd)/tc32/bin/arm-linux-gnueabi-
           export KCPPFLAGS="-D_GNU_SOURCE"
           export PATH=$(pwd)/tools/dct:$PATH
 
-          # 4. Сборка
+          # 5. Сборка
           mkdir -p out
           make O=out $DEFCONFIG
           
-          if make -j$(nproc --all) O=out 2>&1 | tee build.log; then
-            # ... далее остальной код упаковки AnyKernel3 из твоего скрипта ...
+          # Компиляция (теперь упадет, если будет ошибка)
+          make -j$(nproc --all) O=out 2>&1 | tee build.log
+          
+          END=$(date +"%s")
+          DIFF=$((END - START))
+          K_VER=$(make O=out kernelversion)
+          
+          # Успех
+          curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+          -d chat_id="${CHAT_ID}" -d parse_mode="HTML" \
+          -d text="✅ <b>Готово!</b>%0A📋 $K_VER%0A⏳ $((DIFF / 60))м $((DIFF % 60))с"
+          
+          # 6. Упаковка в AnyKernel3
+          echo "📦 Настройка AnyKernel3..."
+          wget -q https://github.com/osm0sis/AnyKernel3/archive/refs/heads/master.zip -O ak3.zip
+          unzip -q ak3.zip && mv AnyKernel3-master ak3
+          
+          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' ak3/anykernel.sh
+          sed -i 's|^block=.*;|block=/dev/block/by-name/boot;|g' ak3/anykernel.sh
+          
+          if [ -f out/arch/arm/boot/zImage-dtb ]; then
+              cp out/arch/arm/boot/zImage-dtb ak3/zImage
+          else
+              cp out/arch/arm/boot/zImage ak3/zImage
+          fi
+          
+          cd ak3 && zip -r9 ../${DEVICE}-Suki-3.2.0.zip * && cd ..
+          
+          curl -F chat_id="${CHAT_ID}" -F document=@"${DEVICE}-Suki-3.2.0.zip" "https://api.telegram.org/bot${TOKEN}/sendDocument"
+          cp build.log build_log.txt
+          curl -F chat_id="${CHAT_ID}" -F document=@"build_log.txt" "https://api.telegram.org/bot${TOKEN}/sendDocument"
 
       - name: Notify on Failure
         if: failure()
