@@ -54,35 +54,37 @@ jobs:
           CONF_PATH=arch/arm/configs/${{ env.DEFCONFIG }}
           echo "🛠️ Настройка конфига: $CONF_PATH"
           
-          # Чистим и задаем имя ядра
+          # Чистим старые записи и задаем имя ядра
           sed -i '/CONFIG_LOCALVERSION=/d' $CONF_PATH || true
           echo 'CONFIG_LOCALVERSION="-SukaKernel"' >> $CONF_PATH
           
-          # Включаем KSU и зависимости
+          # Принудительно включаем KSU и зависимости
           for opt in CONFIG_KSU CONFIG_TRACEPOINTS CONFIG_STAGING; do
             sed -i "/$opt=/d" $CONF_PATH || true
             echo "$opt=y" >> $CONF_PATH
           done
           
-          # 3. ИНТЕГРАЦИЯ SUKISU (Улучшенный метод)
+          # 3. ИНТЕГРАЦИЯ SUKISU (Метод "Спецназ" — сработает в любом случае)
           echo "💉 Загрузка SukiSU Ultra..."
           curl -L https://github.com/SukiSU-Ultra/SukiSU-Ultra/archive/refs/heads/main.zip -o suki.zip
           unzip -q suki.zip
-          
-          # Находим папку (обычно SukiSU-Ultra-main) и копируем содержимое
           SUKI_SRC=$(find . -maxdepth 1 -type d -name "SukiSU-Ultra*" | head -n 1)
+          
           mkdir -p drivers/kernelsu
           cp -rf $SUKI_SRC/kernel/* drivers/kernelsu/
           
-          # Добавляем в Makefile ядра
           if ! grep -q "kernelsu" drivers/Makefile; then
             echo "obj-y += kernelsu/" >> drivers/Makefile
           fi
           
-          # 4. ФИКС ДЛЯ ЯДРА 4.9 (Убираем MODULE_IMPORT_NS)
-          echo "🛠️ Применяем патч совместимости для 4.9..."
-          # Ищем во всех файлах ksu и вырезаем макрос, который вешает сборку
+          # 4. ФИКСЫ СОВМЕСТИМОСТИ С ЯДРОМ 4.9
+          echo "🛠️ Применяем патчи для 4.9..."
+          # Фикс 1: Убираем MODULE_IMPORT_NS
           find drivers/kernelsu/ -type f -name "*.c" -exec sed -i 's/MODULE_IMPORT_NS.*//g' {} +
+          # Фикс 2: Исправляем ошибку unknown type name ‘syscall_fn_t’
+          if [ -f drivers/kernelsu/syscall_hook.h ]; then
+            sed -i 's/syscall_fn_t/void*/g' drivers/kernelsu/syscall_hook.h
+          fi
           
           # 5. ОКРУЖЕНИЕ
           export ARCH=arm
@@ -96,7 +98,6 @@ jobs:
           make O=out $DEFCONFIG
           
           echo "🚀 Начинаем компиляцию..."
-          # Собираем. Если упадет — покажет последние 50 строк ошибки.
           if ! make -j4 O=out 2>&1 | tee build.log; then
             echo "❌ ОШИБКА СБОРКИ! Последние строки:"
             tail -n 50 build.log
@@ -114,7 +115,7 @@ jobs:
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' ak3/anykernel.sh
           sed -i 's|^block=.*;|block=/dev/block/by-name/boot;|g' ak3/anykernel.sh
           
-          # Проверяем, какой файл ядра создался
+          # Ищем ядро (zImage или zImage-dtb)
           if [ -f out/arch/arm/boot/zImage-dtb ]; then
             cp out/arch/arm/boot/zImage-dtb ak3/zImage
           else
