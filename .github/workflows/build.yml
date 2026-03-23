@@ -84,5 +84,10 @@ jobs:
       - name: Send to Telegram
         if: env.BUILD_SUCCESS == 'true'
         run: |
-          curl -F document=@"${DEVICE}-SukaKernel.zip" \
-          "https://api.telegram.org/bot${TOKEN}/sendDocument?chat_id=${CHAT_ID}&caption=✅ Сборка готова!"
+          # Проверяем, существует ли файл перед отправкой
+          if [ -f "${DEVICE}-SukaKernel.zip" ]; then
+            curl -v -F document=@"${DEVICE}-SukaKernel.zip" "https://api.telegram.org/bot${TOKEN}/sendDocument?chat_id=${CHAT_ID}&caption=✅+Сборка+${DEVICE}+завершена!"
+          else
+            echo "❌ Файл архива не найден, отправка отменена."
+            exit 1
+          fi
