@@ -8,6 +8,8 @@ env:
   CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
   DEVICE: Certus
   DEFCONFIG: certus_defconfig
+  ARCH: arm
+  # Путь к тулчейну будет добавлен в шаге сборки
 
 jobs:
   kernel-build:
@@ -24,6 +26,7 @@ jobs:
           build-essential bc bison flex libssl-dev libelf-dev \
           gcc-arm-linux-gnueabi git zip curl wget tar python3 python2 unzip ca-certificates \
           cpio lz4 libncurses5-dev
+          # Важно для старых скриптов MTK
           sudo ln -sf /usr/bin/python2 /usr/bin/python
 
       - name: Download Toolchain
@@ -34,65 +37,52 @@ jobs:
 
       - name: Build Kernel
         run: |
-          START=$(date +"%s")
-          export ARCH=arm
-          export CROSS_COMPILE=$(pwd)/tc32/bin/arm-linux-gnueabi-
+          # Добавляем тулчейн в PATH
+          export PATH=$(pwd)/tc32/bin:$PATH
+          export CROSS_COMPILE=arm-linux-gnueabi-
           
-          # 1. Полная очистка перед интеграцией
-          # Удаляем папку kernelsu и KernelSU, чтобы скрипт создал чистые симлинки
-          rm -rf drivers/kernelsu KernelSU
-          
-          # 2. Установка SukiSU v3.2.0
-          # Используем официальный способ установки через curl, чтобы избежать конфликтов путей
-          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/v3.2.0/kernel/setup.sh" | bash -s v3.2.0
-          
-          # 3. Настройка параметров ядра (Имя + KSU)
-          CONF_FILE="arch/arm/configs/$DEFCONFIG"
-          
-          # Устанавливаем локальную версию (название ядра)
-          sed -i '/CONFIG_LOCALVERSION=/d' "$CONF_FILE"
-          echo 'CONFIG_LOCALVERSION="-SukaKernel"' >> "$CONF_FILE"
-          
-          # Гарантируем включение KSU в конфиге
-          sed -i '/CONFIG_KSU=/d' "$CONF_FILE"
-          echo 'CONFIG_KSU=y' >> "$CONF_FILE"
-          
-          # 4. Процесс компиляции
-          mkdir -p out
+          # Уведомление о начале
+          curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+          -d chat_id="${CHAT_ID}" -d text="🚀 Сборка <b>SukaKernel</b> начата..." -d parse_mode="HTML"
+
+          # Подготовка
+          make mrproper
           make O=out $DEFCONFIG
-          
-          if ! make -j$(nproc) O=out 2>&1 | tee build.log; then
-            echo "❌ Ошибка компиляции! Последние строки:"
-            tail -n 100 build.log
+
+          # Сборка (используем все ядра процессора)
+          if make -j$(nproc --all) O=out; then
+            echo "BUILD_SUCCESS=true" >> $GITHUB_ENV
+          else
+            echo "BUILD_SUCCESS=false" >> $GITHUB_ENV
             curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
-            -d chat_id="${CHAT_ID}" -d text="❌ <b>Ошибка сборки SukaKernel</b>" -d parse_mode="HTML"
+            -d chat_id="${CHAT_ID}" -d text="❌ <b>Ошибка сборки!</b> Проверь логи GitHub Actions." -d parse_mode="HTML"
             exit 1
           fi
-          
-          # 5. Подготовка AnyKernel3a
+
+      - name: Package and Upload
+        if: env.BUILD_SUCCESS == 'true'
+        run: |
+          # Подготовка AnyKernel3
           wget -q https://github.com/osm0sis/AnyKernel3/archive/refs/heads/master.zip -O ak3.zip
           unzip -q ak3.zip && mv AnyKernel3-master ak3
           
-          # Настройка скрипта установки под твое устройство
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' ak3/anykernel.sh
           sed -i 's|^block=.*;|block=/dev/block/by-name/boot;|g' ak3/anykernel.sh
           
-          # Поиск и копирование скомпилированного ядра
+          # Проверка наличия образа (zImage или zImage-dtb)
           if [ -f out/arch/arm/boot/zImage-dtb ]; then
             cp out/arch/arm/boot/zImage-dtb ak3/zImage
           elif [ -f out/arch/arm/boot/zImage ]; then
             cp out/arch/arm/boot/zImage ak3/zImage
           else
-            echo "❌ Ошибка: Файл ядра не найден в out/arch/arm/boot/"
+            echo "❌ Ядро не найдено!"
             exit 1
           fi
           
-          # Создание ZIP архива
           cd ak3 && zip -r9 ../${DEVICE}-SukaKernel.zip * && cd ..
-          
-          # 6. Отправка результата в Telegram
-          DIFF=$(($(date +"%s") - START))
-          curl -s -F document=@"${DEVICE}-SukaKernel.zip" \
-          -F caption="✅ <b>SukaKernel готов!</b>%0A🛡️ SukiSU: v3.2.0%0A⏱ Время: $((DIFF / 60)) мин." \
-          -F parse_mode="HTML" \
-          "https://api.telegram.org/bot${TOKEN}/sendDocument?chat_id=${CHAT_ID}"
+
+      - name: Send to Telegram
+        if: env.BUILD_SUCCESS == 'true'
+        run: |
+          curl -F document=@"${DEVICE}-SukaKernel.zip" \
+          "https://api.telegram.org/bot${TOKEN}/sendDocument?chat_id=${CHAT_ID}&caption=✅ Сборка готова!"
