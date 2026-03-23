@@ -38,21 +38,28 @@ jobs:
           export ARCH=arm
           export CROSS_COMPILE=$(pwd)/tc32/bin/arm-linux-gnueabi-
           
-          # 1. Внедрение SukiSU Ultra
-          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s main
+          # 1. Интеграция конкретной версии SukiSU 3.2.0
+          # Используем тег v3.2.0, чтобы не прилетела 4-я версия из main
+          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/v3.2.0/kernel/setup.sh" | bash -s v3.2.0
           
           # 2. Настройка конфига (Имя + KSU)
-          # Удаляем старое имя и добавляем SukaKernel
+          # Удаляем любое старое упоминание LOCALVERSION и ставим твое
           sed -i '/CONFIG_LOCALVERSION=/d' arch/arm/configs/$DEFCONFIG
           echo 'CONFIG_LOCALVERSION="-SukaKernel"' >> arch/arm/configs/$DEFCONFIG
-          # Включаем ядро SukiSU
+          
+          # Гарантируем, что KSU включен
+          sed -i '/CONFIG_KSU=/d' arch/arm/configs/$DEFCONFIG
           echo 'CONFIG_KSU=y' >> arch/arm/configs/$DEFCONFIG
           
-          # 3. Компиляция
+          # 3. Сама сборка
           mkdir -p out
           make O=out $DEFCONFIG
+          
           if ! make -j$(nproc) O=out 2>&1 | tee build.log; then
-            curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" -d chat_id="${CHAT_ID}" -d text="❌ Ошибка сборки SukaKernel"
+            echo "❌ Ошибка компиляции!"
+            tail -n 50 build.log
+            curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+            -d chat_id="${CHAT_ID}" -d text="❌ <b>Ошибка сборки SukaKernel (4.9.200)</b>" -d parse_mode="HTML"
             exit 1
           fi
           
@@ -62,14 +69,16 @@ jobs:
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' ak3/anykernel.sh
           sed -i 's|^block=.*;|block=/dev/block/by-name/boot;|g' ak3/anykernel.sh
           
-          # Копируем результат
-          [ -f out/arch/arm/boot/zImage-dtb ] && cp out/arch/arm/boot/zImage-dtb ak3/zImage || cp out/arch/arm/boot/zImage ak3/zImage
+          if [ -f out/arch/arm/boot/zImage-dtb ]; then
+            cp out/arch/arm/boot/zImage-dtb ak3/zImage
+          else
+            cp out/arch/arm/boot/zImage ak3/zImage
+          fi
           
           cd ak3 && zip -r9 ../${DEVICE}-SukaKernel.zip * && cd ..
           
-          # Отправка в ТГ
           DIFF=$(($(date +"%s") - START))
           curl -s -F document=@"${DEVICE}-SukaKernel.zip" \
-          -F caption="✅ <b>SukaKernel готов!</b>%0A🛡️ SukiSU интегрирован%0A⏱ Время: $((DIFF / 60)) мин." \
+          -F caption="✅ <b>SukaKernel (4.9.200) готов!</b>%0A🛡️ SukiSU: v3.2.0%0A⏱ Время сборки: $((DIFF / 60)) мин." \
           -F parse_mode="HTML" \
           "https://api.telegram.org/bot${TOKEN}/sendDocument?chat_id=${CHAT_ID}"
