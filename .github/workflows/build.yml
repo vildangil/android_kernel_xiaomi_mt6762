@@ -28,91 +28,58 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y --no-install-recommends \
           build-essential bc bison flex libssl-dev libelf-dev \
-          gcc-arm-linux-gnueabi git zip curl wget tar python3 python2 unzip ca-certificates
+          gcc-arm-linux-gnueabi git zip curl wget tar python3 python2 unzip ca-certificates \
+          cpio lz4 libncurses5-dev
+          
+          # Создаем симлинк, чтобы команда python вызывала python2 (критично для DrvGen.py)
+          sudo ln -sf /usr/bin/python2 /usr/bin/python
 
       - name: Download Toolchain
         run: |
           mkdir -p tc32
           wget -q https://releases.linaro.org/components/toolchain/binaries/7.5-2019.12/arm-linux-gnueabi/gcc-linaro-7.5.0-2019.12-x86_64_arm-linux-gnueabi.tar.xz
-          tar -xf gcc-linaro-7.5.0-2019.12-x86_64_arm-linux-gnueabi.tar.xz -C tc32 --strip-components=1
-
-      - name: Patch SukiSU Ultra 3.2.0
-        run: |
-          echo "💉 Интегрируем SukiSU Ultra v3.2.0..."
-          # Качаем из main, чтобы избежать 404, и ставим тег v3.2.0
-          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s v3.2.0
+          tar -xf gcc-linaro-*.tar.xz -C tc32 --strip-components=1
+          rm gcc-linaro-*.tar.xz
 
       - name: Build Kernel
         run: |
           START=$(date +"%s")
-          
-          # 1. Подготовка
-          sudo ln -sf /usr/bin/python3 /usr/bin/python
-          chmod -R +x tools/
-          
-          # 2. Настройка конфига
-          CONF_PATH=arch/arm/configs/${{ env.DEFCONFIG }}
-          sed -i '/CONFIG_LOCALVERSION=/d' $CONF_PATH || true
-          echo 'CONFIG_LOCALVERSION="-SukaKernel"' >> $CONF_PATH
-          for opt in CONFIG_KSU CONFIG_TRACEPOINTS CONFIG_STAGING; do
-            sed -i "/$opt=/d" $CONF_PATH || true
-            echo "$opt=y" >> $CONF_PATH
-          done
-          
-          # 3. Загрузка SukiSU
-          curl -L https://github.com/SukiSU-Ultra/SukiSU-Ultra/archive/refs/heads/main.zip -o suki.zip
-          unzip -q suki.zip
-          SUKI_SRC=$(find . -maxdepth 1 -type d -name "SukiSU-Ultra*" | head -n 1)
-          mkdir -p drivers/kernelsu
-          cp -rf $SUKI_SRC/kernel/* drivers/kernelsu/
-          if ! grep -q "kernelsu" drivers/Makefile; then
-            echo "obj-y += kernelsu/" >> drivers/Makefile
-          fi
-          
-          # 4. ТЕ САМЫЕ "ЛЕГКИЕ" ФИКСЫ ДЛЯ 4.9
-          echo "🛠️ Исправляем несовместимость API 4.9..."
-          
-          # Отключаем -Werror, чтобы мелкие варнинги не стопили сборку
-          find drivers/kernelsu/ -name "Makefile" -exec sed -i 's/-Werror//g' {} +
-
-          # Фикс kernel_write: меняем передачу &off (указатель) на off (значение)
-          # И добавляем приведение типа (const char *) для буфера
-          sed -i 's/kernel_write(\([^,]*\), \([^,]*\), \([^,]*\), &\([^)]*\))/kernel_write(\1, (const char *)\2, \3, \4)/g' drivers/kernelsu/allowlist.c
-
-          # Фикс TWA_RESUME: в 4.9 это просто boolean notify. Ставим true.
-          sed -i 's/TWA_RESUME/true/g' drivers/kernelsu/allowlist.c
-
-          # Фикс syscall_fn_t: заменяем на void* (стандарт для 4.9)
-          if [ -f drivers/kernelsu/syscall_hook.h ]; then
-            sed -i 's/syscall_fn_t/void*/g' drivers/kernelsu/syscall_hook.h
-          fi
-
-          # 5. Сборка
           export ARCH=arm
           export CROSS_COMPILE=$(pwd)/tc32/bin/arm-linux-gnueabi-
+          
           mkdir -p out
           make O=out $DEFCONFIG
+          
           if ! make -j$(nproc) O=out 2>&1 | tee build.log; then
-            echo "❌ Ошибка! Последние 50 строк лога:"
+            echo "❌ Ошибка компиляции! Последние 50 строк лога:"
             tail -n 50 build.log
+            curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+            -d chat_id="${CHAT_ID}" -d text="❌ <b>Ошибка сборки!</b> Проверьте логи GitHub Actions." -d parse_mode="HTML"
             exit 1
           fi
           
-          # 6. Упаковка и отправка
+          # Упаковка и отправка
           wget -q https://github.com/osm0sis/AnyKernel3/archive/refs/heads/master.zip -O ak3.zip
           unzip -q ak3.zip && mv AnyKernel3-master ak3
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' ak3/anykernel.sh
           sed -i 's|^block=.*;|block=/dev/block/by-name/boot;|g' ak3/anykernel.sh
-          [ -f out/arch/arm/boot/zImage-dtb ] && cp out/arch/arm/boot/zImage-dtb ak3/zImage || cp out/arch/arm/boot/zImage ak3/zImage
+          
+          # Надежная проверка наличия собранного ядра
+          if [ -f out/arch/arm/boot/zImage-dtb ]; then
+            cp out/arch/arm/boot/zImage-dtb ak3/zImage
+          elif [ -f out/arch/arm/boot/zImage ]; then
+            cp out/arch/arm/boot/zImage ak3/zImage
+          else
+            echo "❌ Ядро (zImage) не найдено в папке out/arch/arm/boot/"
+            exit 1
+          fi
+          
           cd ak3 && zip -r9 ../${DEVICE}-SukaKernel.zip * && cd ..
           
           DIFF=$(($(date +"%s") - START))
-          curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" -d chat_id="${CHAT_ID}" -d parse_mode="HTML" \
-          -d text="✅ <b>Ядро собрано!</b>%0A⏳ Время: $((DIFF / 60))м $((DIFF % 60))с"
-          curl -F chat_id="${CHAT_ID}" -F document=@"${DEVICE}-SukaKernel.zip" "https://api.telegram.org/bot${TOKEN}/sendDocument"
-
-      - name: Notify on Failure
-        if: failure()
-        run: |
-          curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
-          -d chat_id="${CHAT_ID}" -d text="⚠️ Воркфлоу прерван на раннем этапе (зависимости или тулчейн)."
+          
+          # Отправка файла в Telegram
+          curl -s -F document=@"${DEVICE}-SukaKernel.zip" \
+          -F caption="✅ <b>Сборка успешно завершена!</b>%0A⏱ Время сборки: $((DIFF / 60)) мин. $((DIFF % 60)) сек." \
+          -F parse_mode="HTML" \
+          "https://api.telegram.org/bot${TOKEN}/sendDocument?chat_id=${CHAT_ID}"
