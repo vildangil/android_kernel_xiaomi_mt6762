@@ -38,62 +38,65 @@ jobs:
           export ARCH=arm
           export CROSS_COMPILE=$(pwd)/tc32/bin/arm-linux-gnueabi-
           
-          # 1. Чистая установка SukiSU v3.2.0
-          # Удаляем старые попытки, чтобы не было конфликтов
+          # 1. Чистая интеграция SukiSU v3.2.0
+          # Удаляем старые неудачные попытки, чтобы скрипт создал всё с нуля
           rm -rf drivers/kernelsu
           
-          # Клонируем версию 3.2.0
-          git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra.git -b v3.2.0 drivers/kernelsu --depth 1
+          # Скачиваем и запускаем официальный установщик v3.2.0
+          # Он сам создаст правильную папку drivers/kernelsu и пропишет Kconfig
+          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/v3.2.0/kernel/setup.sh" | bash -s v3.2.0
           
-          # ВАЖНО: Запускаем скрипт из КОРНЯ ядра, не переходя в другую папку
-          # Это исправит ошибку ""drivers/" directory not found"
-          bash drivers/kernelsu/kernel/setup.sh v3.2.0
-          
-          # 2. Настройка конфига (Имя + KSU)
-          # Проверяем, существует ли файл, чтобы не упасть с ошибкой
+          # 2. Настройка названия и активация KSU
           CONF_FILE="arch/arm/configs/$DEFCONFIG"
+          
+          # Проверяем наличие конфига на всякий случай
           if [ ! -f "$CONF_FILE" ]; then
-            echo "❌ Файл конфига $CONF_FILE не найден! Проверяем содержимое папки configs:"
-            ls arch/arm/configs/
+            echo "❌ Ошибка: Конфиг $CONF_FILE не найден!"
+            ls -R arch/arm/configs/
             exit 1
           fi
-          
-          # Удаляем старые записи и добавляем твои
+
+          # Меняем название на SukaKernel
           sed -i '/CONFIG_LOCALVERSION=/d' "$CONF_FILE"
           echo 'CONFIG_LOCALVERSION="-SukaKernel"' >> "$CONF_FILE"
           
+          # Включаем поддержку KernelSU
           sed -i '/CONFIG_KSU=/d' "$CONF_FILE"
           echo 'CONFIG_KSU=y' >> "$CONF_FILE"
           
-          # 3. Компиляция
+          # 3. Компиляция ядра
           mkdir -p out
           make O=out $DEFCONFIG
           
           if ! make -j$(nproc) O=out 2>&1 | tee build.log; then
             echo "❌ Ошибка компиляции!"
-            tail -n 50 build.log
+            tail -n 100 build.log
             curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
             -d chat_id="${CHAT_ID}" -d text="❌ <b>Ошибка сборки SukaKernel</b>" -d parse_mode="HTML"
             exit 1
           fi
           
-          # 4. Упаковка в AnyKernel3
+          # 4. Упаковка
           wget -q https://github.com/osm0sis/AnyKernel3/archive/refs/heads/master.zip -O ak3.zip
           unzip -q ak3.zip && mv AnyKernel3-master ak3
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' ak3/anykernel.sh
           sed -i 's|^block=.*;|block=/dev/block/by-name/boot;|g' ak3/anykernel.sh
           
-          # Подхватываем ядро (пробуем разные варианты имени файла)
+          # Проверка результата сборки
           if [ -f out/arch/arm/boot/zImage-dtb ]; then
             cp out/arch/arm/boot/zImage-dtb ak3/zImage
-          else
+          elif [ -f out/arch/arm/boot/zImage ]; then
             cp out/arch/arm/boot/zImage ak3/zImage
+          else
+            echo "❌ Файл ядра не найден!"
+            exit 1
           fi
           
           cd ak3 && zip -r9 ../${DEVICE}-SukaKernel.zip * && cd ..
           
+          # Отправка в Telegram
           DIFF=$(($(date +"%s") - START))
           curl -s -F document=@"${DEVICE}-SukaKernel.zip" \
-          -F caption="✅ <b>SukaKernel (4.9.200) готов!</b>%0A🛡️ SukiSU: v3.2.0%0A⏱ Время: $((DIFF / 60)) мин." \
+          -F caption="✅ <b>SukaKernel готов!</b>%0A🛡️ SukiSU: v3.2.0%0A⏱ Время: $((DIFF / 60)) мин." \
           -F parse_mode="HTML" \
           "https://api.telegram.org/bot${TOKEN}/sendDocument?chat_id=${CHAT_ID}"
