@@ -38,59 +38,61 @@ jobs:
           export ARCH=arm
           export CROSS_COMPILE=$(pwd)/tc32/bin/arm-linux-gnueabi-
           
-          # 1. Полная очистка перед установкой
-          # Удаляем любые следы прошлых попыток, чтобы не было конфликтов симлинков
+          # 1. Полная очистка перед интеграцией
+          # Удаляем папку kernelsu и KernelSU, чтобы скрипт создал чистые симлинки
           rm -rf drivers/kernelsu KernelSU
           
-          # 2. Установка SukiSU v3.2.0 (через официальный скрипт)
-          # Скрипт сам скачает версию 3.2.0 и правильно пропишет пути в Kconfig и Makefile
+          # 2. Установка SukiSU v3.2.0
+          # Используем официальный способ установки через curl, чтобы избежать конфликтов путей
           curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/v3.2.0/kernel/setup.sh" | bash -s v3.2.0
           
-          # 3. Настройка конфига (Имя + KSU)
+          # 3. Настройка параметров ядра (Имя + KSU)
           CONF_FILE="arch/arm/configs/$DEFCONFIG"
           
-          # Удаляем старое имя и ставим SukaKernel
+          # Устанавливаем локальную версию (название ядра)
           sed -i '/CONFIG_LOCALVERSION=/d' "$CONF_FILE"
           echo 'CONFIG_LOCALVERSION="-SukaKernel"' >> "$CONF_FILE"
           
-          # Принудительно включаем KSU (на случай, если скрипт этого не сделал)
+          # Гарантируем включение KSU в конфиге
           sed -i '/CONFIG_KSU=/d' "$CONF_FILE"
           echo 'CONFIG_KSU=y' >> "$CONF_FILE"
           
-          # 4. Компиляция
+          # 4. Процесс компиляции
           mkdir -p out
           make O=out $DEFCONFIG
           
-          # Если make $DEFCONFIG прошел успешно, запускаем основную сборку
           if ! make -j$(nproc) O=out 2>&1 | tee build.log; then
-            echo "❌ Ошибка компиляции! Последние 100 строк:"
+            echo "❌ Ошибка компиляции! Последние строки:"
             tail -n 100 build.log
             curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
             -d chat_id="${CHAT_ID}" -d text="❌ <b>Ошибка сборки SukaKernel</b>" -d parse_mode="HTML"
             exit 1
           fi
           
-          # 5. Упаковка в AnyKernel3
+          # 5. Подготовка AnyKernel3a
           wget -q https://github.com/osm0sis/AnyKernel3/archive/refs/heads/master.zip -O ak3.zip
           unzip -q ak3.zip && mv AnyKernel3-master ak3
+          
+          # Настройка скрипта установки под твое устройство
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' ak3/anykernel.sh
           sed -i 's|^block=.*;|block=/dev/block/by-name/boot;|g' ak3/anykernel.sh
           
-          # Копируем ядро (проверяем разные варианты названия файла)
+          # Поиск и копирование скомпилированного ядра
           if [ -f out/arch/arm/boot/zImage-dtb ]; then
             cp out/arch/arm/boot/zImage-dtb ak3/zImage
           elif [ -f out/arch/arm/boot/zImage ]; then
             cp out/arch/arm/boot/zImage ak3/zImage
           else
-            echo "❌ Ядро не найдено в out/arch/arm/boot/"
+            echo "❌ Ошибка: Файл ядра не найден в out/arch/arm/boot/"
             exit 1
           fi
           
+          # Создание ZIP архива
           cd ak3 && zip -r9 ../${DEVICE}-SukaKernel.zip * && cd ..
           
-          # 6. Отправка в ТГ
+          # 6. Отправка результата в Telegram
           DIFF=$(($(date +"%s") - START))
           curl -s -F document=@"${DEVICE}-SukaKernel.zip" \
-          -F caption="✅ <b>SukaKernel (4.9.200) готов!</b>%0A🛡️ SukiSU: v3.2.0%0A⏱ Время сборки: $((DIFF / 60) мин." \
+          -F caption="✅ <b>SukaKernel готов!</b>%0A🛡️ SukiSU: v3.2.0%0A⏱ Время: $((DIFF / 60)) мин." \
           -F parse_mode="HTML" \
           "https://api.telegram.org/bot${TOKEN}/sendDocument?chat_id=${CHAT_ID}"
