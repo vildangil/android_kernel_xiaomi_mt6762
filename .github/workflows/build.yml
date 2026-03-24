@@ -23,7 +23,7 @@ jobs:
         run: |
           curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
           -d chat_id="${CHAT_ID}" -d text="Скрипт запущен" -d parse_mode="HTML"
-
+          
       - name: Install Dependencies
         run: |
           sudo apt-get update -y
@@ -33,61 +33,12 @@ jobs:
           cpio lz4 libncurses5-dev
           # Важно для старых скриптов MTK
           sudo ln -sf /usr/bin/python2 /usr/bin/python
-
+          
       - name: Download Toolchain
         run: |
           mkdir -p tc32
           wget -q https://releases.linaro.org/components/toolchain/binaries/7.5-2019.12/arm-linux-gnueabi/gcc-linaro-7.5.0-2019.12-x86_64_arm-linux-gnueabi.tar.xz
           tar -xf gcc-linaro-*.tar.xz -C tc32 --strip-components=1
-
-      - name: Integrate SukiSU Ultra (ARM32 Final Fix)
-        run: |
-          # 1. Подготовка
-          rm -rf drivers/kernelsu tmp_ksu
-          git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra.git tmp_ksu
-          
-          # 2. Определяем, где лежат исходники (в некоторых версиях SukiSU папка называется по-разному)
-          if [ -d "tmp_ksu/kernel" ]; then
-            mv tmp_ksu/kernel drivers/kernelsu
-          else
-            mv tmp_ksu drivers/kernelsu
-          fi
-          rm -rf tmp_ksu
-
-          # 3. ФИКС АРХИТЕКТУРЫ (уже проверено)
-          sed -i '/#error "Unsupported arch"/d' drivers/kernelsu/arch.h
-          cat <<EOF >> drivers/kernelsu/arch.h
-          #if defined(__arm__)
-          #define ksu_get_syscall_nr(regs) ((regs)->ARM_r7)
-          #define ksu_get_first_arg(regs) ((regs)->ARM_r0)
-          #define ksu_get_second_arg(regs) ((regs)->ARM_r1)
-          #define ksu_get_third_arg(regs) ((regs)->ARM_r2)
-          #define ksu_get_fourth_arg(regs) ((regs)->ARM_r3)
-          #endif
-          EOF
-
-          # 4. ТОТАЛЬНЫЙ ФИКС UID/GID (Решаем ошибку .val во всех файлах)
-          # Рекурсивно ищем все .c и .h файлы и удаляем .val
-          find drivers/kernelsu -type f \( -name "*.c" -o -name "*.h" \) -exec sed -i 's/\.val//g' {} +
-          
-          # 5. ФИКС ТИПОВ В allowlist.c
-          # Исправляем ошибку "discards qualifiers" (const struct cred)
-          if [ -f "drivers/kernelsu/allowlist.c" ]; then
-            sed -i 's/fp->f_cred/(struct cred *)fp->f_cred/g' drivers/kernelsu/allowlist.c
-          fi
-
-          # 6. Интеграция в Makefile и Kconfig
-          grep -q "kernelsu" drivers/Makefile || echo "obj-y += kernelsu/" >> drivers/Makefile
-          if ! grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig; then
-            sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
-          fi
-
-          # 7. Конфиг KPROBES (критично для работы Root)
-          echo "CONFIG_KPROBES=y" >> arch/arm/configs/${{ env.DEFCONFIG }}
-          echo "CONFIG_KPROBE_EVENTS=y" >> arch/arm/configs/${{ env.DEFCONFIG }}
-          echo "CONFIG_HAVE_KPROBES=y" >> arch/arm/configs/${{ env.DEFCONFIG }}
-          
-          echo "✅ Все патчи применены рекурсивно. Начинаем сборку..."
           
       - name: Integrate SukiSU Ultra (ARM32 Absolute Fix)
         run: |
@@ -142,7 +93,39 @@ jobs:
           echo "CONFIG_HAVE_KPROBES=y" >> arch/arm/configs/${{ env.DEFCONFIG }}
           
           echo "✅ Все барьеры ARM32 устранены. Запускаем компиляцию."
-
+          
+      - name: Build Kernel
+        run: |
+          export PATH=$(pwd)/tc32/bin:$PATH
+          export CROSS_COMPILE=arm-linux-gnueabi-
+          export ARCH=arm
+          # Уведомление в Telegram
+          curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+          -d chat_id="${CHAT_ID}" -d text="🚀 Сборка <b>SukaKernel</b> начата..." -d parse_mode="HTML"
+          # Подготовка
+          make O=out mrproper
+          make O=out $DEFCONFIG
+          # Принудительная установка параметров через штатный скрипт ядра
+          # Это гарантирует, что название будет "SukaKernel" и KSU включится
+          ./scripts/config --file out/.config --set-str LOCALVERSION "-SukaKernel"
+          ./scripts/config --file out/.config --enable CONFIG_KSU
+          ./scripts/config --file out/.config --enable CONFIG_KSU_SUKI
+          ./scripts/config --file out/.config --enable CONFIG_KPROBES
+          ./scripts/config --file out/.config --enable CONFIG_HAVE_KPROBES
+          ./scripts/config --file out/.config --enable CONFIG_KPROBE_EVENTS
+          ./scripts/config --file out/.config --enable CONFIG_MODULES
+          # Обновляем конфиг, чтобы подтянуть зависимости для SukiSU
+          make O=out ARCH=arm olddefconfig
+          # Сборка
+          if make -j$(nproc --all) O=out ARCH=arm; then
+            echo "BUILD_SUCCESS=true" >> $GITHUB_ENV
+          else
+            echo "BUILD_SUCCESS=false" >> $GITHUB_ENV
+            curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+            -d chat_id="${CHAT_ID}" -d text="❌ <b>Ошибка сборки SukaKernel</b>" -d parse_mode="HTML"
+            exit 1
+          fi
+          
       - name: Package and Upload
         if: env.BUILD_SUCCESS == 'true'
         run: |
@@ -164,7 +147,7 @@ jobs:
           fi
           
           cd ak3 && zip -r9 ../${DEVICE}-SukaKernel.zip * && cd ..
-
+          
       - name: Send to Telegram
         if: env.BUILD_SUCCESS == 'true'
         run: |
