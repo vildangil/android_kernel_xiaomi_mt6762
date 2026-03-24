@@ -67,6 +67,11 @@ jobs:
             exit 1
           fi
 
+      - name: Verify Config
+        run: |
+          grep "CONFIG_KSU" out/.config || echo "❌ KSU missing in config!"
+          grep "CONFIG_LOCALVERSION" out/.config || echo "❌ Localversion missing!"
+
       - name: Package and Upload
         if: env.BUILD_SUCCESS == 'true'
         run: |
