@@ -50,7 +50,7 @@ jobs:
           make O=out $DEFCONFIG
 
           # Сборка (используем все ядра процессора)
-          if make -j$(nproc --all) O=out; then
+          if make -j$(nproc --all) O=out LOCALVERSION="-SukaKernel"; then
             echo "BUILD_SUCCESS=true" >> $GITHUB_ENV
           else
             echo "BUILD_SUCCESS=false" >> $GITHUB_ENV
