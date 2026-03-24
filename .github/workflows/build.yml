@@ -47,41 +47,39 @@ jobs:
           echo "CONFIG_OVERLAY_FS=y" >> arch/arm/configs/$DEFCONFIG
           echo "CONFIG_PROFILING=y" >> arch/arm/configs/$DEFCONFIG
 
-      - name: Integrate SukiSU
-        env:
-          # ВАЖНО: убедись, что в Settings -> Secrets -> Actions создан секрет GH_PAT
-          GH_TOKEN: ${{ secrets.GH_PAT }}
+      - name: Integrate KernelSU (ARM32 version)
         run: |
-          # 1. Проверка наличия токена (безопасная, не палит сам токен)
-          if [ -z "$GH_TOKEN" ]; then
-            echo "❌ КРИТИЧЕСКАЯ ОШИБКА: Секрет GH_PAT не найден!"
-            echo "Проверь: Settings -> Secrets and variables -> Actions -> Repository secrets"
-            exit 1
-          fi
-
-          # 2. Очистка
+          # 1. Очистка
           rm -rf drivers/kernelsu tmp_ksu
           
-          # 3. Клонирование (используем формат x-access-token)
-          echo "Переходим к клонированию SukiSU..."
-          git clone "https://x-access-token:${GH_TOKEN}@github.com/5ec1cff/SukiSU.git" tmp_ksu
+          # 2. Клонируем публичный форк с поддержкой ARM32 (не требует GH_PAT)
+          git clone https://github.com/rsuntk/KernelSU.git tmp_ksu
           
-          # 4. Перенос файлов (для 32-битных ядер обычно нужна ветка main или v3)
-          if [ -d "tmp_ksu" ]; then
-            cd tmp_ksu && git checkout main && cd ..
-            mv tmp_ksu/kernel drivers/kernelsu
-            rm -rf tmp_ksu
-            echo "✅ Исходники успешно скачаны"
-          else
-            echo "❌ Ошибка клонирования!"
+          # 3. Перенос файлов драйвера
+          # В этом форке ветка 'main' обычно самая актуальная
+          cd tmp_ksu && git checkout main && cd ..
+          mv tmp_ksu/kernel drivers/kernelsu
+          rm -rf tmp_ksu
+
+          # 4. Проверка
+          if [ ! -f "drivers/kernelsu/Kconfig" ]; then
+            echo "❌ Ошибка: Исходники не найдены!"
             exit 1
           fi
 
-          # 5. Интеграция в дерево сборки
+          # 5. Интеграция в дерево исходников
           grep -q "kernelsu" drivers/Makefile || echo "obj-y += kernelsu/" >> drivers/Makefile
           if ! grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig; then
             sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
           fi
+
+          # 6. КРИТИЧЕСКИЙ ФИКС для ARM32: Включаем KPROBES
+          # Без этого ядра KernelSU не получит права root
+          echo "CONFIG_KPROBES=y" >> arch/arm/configs/${{ env.DEFCONFIG }}
+          echo "CONFIG_KPROBE_EVENTS=y" >> arch/arm/configs/${{ env.DEFCONFIG }}
+          echo "CONFIG_HAVE_KPROBES=y" >> arch/arm/configs/${{ env.DEFCONFIG }}
+          
+          echo "✅ KernelSU интегрирован и KPROBES включены"
 
       - name: Build Kernel
         run: |
