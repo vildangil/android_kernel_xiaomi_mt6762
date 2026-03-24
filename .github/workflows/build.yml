@@ -40,36 +40,18 @@ jobs:
           wget -q https://releases.linaro.org/components/toolchain/binaries/7.5-2019.12/arm-linux-gnueabi/gcc-linaro-7.5.0-2019.12-x86_64_arm-linux-gnueabi.tar.xz
           tar -xf gcc-linaro-*.tar.xz -C tc32 --strip-components=1
 
-      - name: echo ksu
-        run: |
-          echo "CONFIG_KSU=y" >> arch/arm/configs/$DEFCONFIG
-          echo "CONFIG_KSU_SUKI=y" >> arch/arm/configs/$DEFCONFIG
-          echo "CONFIG_OVERLAY_FS=y" >> arch/arm/configs/$DEFCONFIG
-          echo "CONFIG_PROFILING=y" >> arch/arm/configs/$DEFCONFIG
-
       - name: Integrate SukiSU Ultra (ARM32 Fix)
         run: |
-          # 1. Полная очистка перед началом
           rm -rf drivers/kernelsu tmp_ksu
-          
-          # 2. Клонируем официальный репозиторий SukiSU Ultra
-          # Используем тот, что ты нашел на скрине
           git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra.git tmp_ksu
-          
-          # 3. Перенос исходников драйвера
-          # В Ultra версии файлы обычно лежат в папке kernel
           cd tmp_ksu && (git checkout main || git checkout master) && cd ..
           mv tmp_ksu/kernel drivers/kernelsu
           rm -rf tmp_ksu
 
-          # 4. ФИКС ОШИБКИ "Unsupported arch"
-          # SukiSU Ultra по умолчанию не знает про 32-битные регистры ARM. 
-          # Мы удаляем строку с ошибкой и вписываем параметры для r7 (номер системного вызова)
+          # 1. Фикс архитектуры
           sed -i '/#error "Unsupported arch"/d' drivers/kernelsu/arch.h
-          
           cat <<EOF >> drivers/kernelsu/arch.h
           #if defined(__arm__)
-          /* Специальный патч для 32-битной архитектуры (Certus) */
           #define ksu_get_syscall_nr(regs) ((regs)->ARM_r7)
           #define ksu_get_first_arg(regs) ((regs)->ARM_r0)
           #define ksu_get_second_arg(regs) ((regs)->ARM_r1)
@@ -78,19 +60,20 @@ jobs:
           #endif
           EOF
 
-          # 5. Интеграция в дерево сборки (Makefile и Kconfig)
+          # 2. Фикс типов (решаем твою ошибку из лога)
+          sed -i 's/fp->f_cred/(struct cred *)fp->f_cred/g' drivers/kernelsu/allowlist.c
+
+          # 3. Интеграция в дерево
           grep -q "kernelsu" drivers/Makefile || echo "obj-y += kernelsu/" >> drivers/Makefile
           if ! grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig; then
             sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
           fi
 
-          # 6. ПРИНУДИТЕЛЬНЫЙ ВКЛЮЧЕНИЕ KPROBES
-          # Без этого SukiSU скомпилируется, но работать (давать рут) не будет
+          # 4. Конфиг
           echo "CONFIG_KPROBES=y" >> arch/arm/configs/${{ env.DEFCONFIG }}
           echo "CONFIG_KPROBE_EVENTS=y" >> arch/arm/configs/${{ env.DEFCONFIG }}
           echo "CONFIG_HAVE_KPROBES=y" >> arch/arm/configs/${{ env.DEFCONFIG }}
           
-          echo "✅ SukiSU Ultra интегрирован и адаптирован под ARM32"
           
       - name: Build Kernel
         run: |
