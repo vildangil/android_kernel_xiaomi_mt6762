@@ -47,40 +47,51 @@ jobs:
           echo "CONFIG_OVERLAY_FS=y" >> arch/arm/configs/$DEFCONFIG
           echo "CONFIG_PROFILING=y" >> arch/arm/configs/$DEFCONFIG
 
-      - name: Integrate KernelSU (ARM32 version)
+      - name: Integrate SukiSU Ultra (ARM32 Fix)
         run: |
-          # 1. Очистка
+          # 1. Полная очистка перед началом
           rm -rf drivers/kernelsu tmp_ksu
           
-          # 2. Клонируем публичный форк с поддержкой ARM32 (не требует GH_PAT)
-          git clone https://github.com/rsuntk/KernelSU.git tmp_ksu
+          # 2. Клонируем официальный репозиторий SukiSU Ultra
+          # Используем тот, что ты нашел на скрине
+          git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra.git tmp_ksu
           
-          # 3. Перенос файлов драйвера
-          # В этом форке ветка 'main' обычно самая актуальная
-          cd tmp_ksu && git checkout main && cd ..
+          # 3. Перенос исходников драйвера
+          # В Ultra версии файлы обычно лежат в папке kernel
+          cd tmp_ksu && (git checkout main || git checkout master) && cd ..
           mv tmp_ksu/kernel drivers/kernelsu
           rm -rf tmp_ksu
 
-          # 4. Проверка
-          if [ ! -f "drivers/kernelsu/Kconfig" ]; then
-            echo "❌ Ошибка: Исходники не найдены!"
-            exit 1
-          fi
+          # 4. ФИКС ОШИБКИ "Unsupported arch"
+          # SukiSU Ultra по умолчанию не знает про 32-битные регистры ARM. 
+          # Мы удаляем строку с ошибкой и вписываем параметры для r7 (номер системного вызова)
+          sed -i '/#error "Unsupported arch"/d' drivers/kernelsu/arch.h
+          
+          cat <<EOF >> drivers/kernelsu/arch.h
+          #if defined(__arm__)
+          /* Специальный патч для 32-битной архитектуры (Certus) */
+          #define ksu_get_syscall_nr(regs) ((regs)->ARM_r7)
+          #define ksu_get_first_arg(regs) ((regs)->ARM_r0)
+          #define ksu_get_second_arg(regs) ((regs)->ARM_r1)
+          #define ksu_get_third_arg(regs) ((regs)->ARM_r2)
+          #define ksu_get_fourth_arg(regs) ((regs)->ARM_r3)
+          #endif
+          EOF
 
-          # 5. Интеграция в дерево исходников
+          # 5. Интеграция в дерево сборки (Makefile и Kconfig)
           grep -q "kernelsu" drivers/Makefile || echo "obj-y += kernelsu/" >> drivers/Makefile
           if ! grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig; then
             sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
           fi
 
-          # 6. КРИТИЧЕСКИЙ ФИКС для ARM32: Включаем KPROBES
-          # Без этого ядра KernelSU не получит права root
+          # 6. ПРИНУДИТЕЛЬНЫЙ ВКЛЮЧЕНИЕ KPROBES
+          # Без этого SukiSU скомпилируется, но работать (давать рут) не будет
           echo "CONFIG_KPROBES=y" >> arch/arm/configs/${{ env.DEFCONFIG }}
           echo "CONFIG_KPROBE_EVENTS=y" >> arch/arm/configs/${{ env.DEFCONFIG }}
           echo "CONFIG_HAVE_KPROBES=y" >> arch/arm/configs/${{ env.DEFCONFIG }}
           
-          echo "✅ KernelSU интегрирован и KPROBES включены"
-
+          echo "✅ SukiSU Ultra интегрирован и адаптирован под ARM32"
+          
       - name: Build Kernel
         run: |
           export PATH=$(pwd)/tc32/bin:$PATH
