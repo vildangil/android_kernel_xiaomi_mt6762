@@ -96,6 +96,9 @@ jobs:
           ./scripts/config --file out/.config --set-str LOCALVERSION "-SukaKernel"
           ./scripts/config --file out/.config --enable CONFIG_KSU
           ./scripts/config --file out/.config --enable CONFIG_KSU_SUKI
+          ./scripts/config --file out/.config --enable CONFIG_KPROBES
+          ./scripts/config --file out/.config --enable CONFIG_HAVE_KPROBES
+          ./scripts/config --file out/.config --enable CONFIG_KPROBE_EVENTS
 
           # Обновляем конфиг, чтобы подтянуть зависимости для SukiSU
           make O=out ARCH=arm olddefconfig
