@@ -49,7 +49,7 @@ jobs:
           mv tmp_ksu/kernel drivers/kernelsu
           rm -rf tmp_ksu
 
-          # 2. Фикс архитектуры (уже работает)
+          # 2. Фикс архитектуры (уже проверено)
           sed -i '/#error "Unsupported arch"/d' drivers/kernelsu/arch.h
           cat <<EOF >> drivers/kernelsu/arch.h
           #if defined(__arm__)
@@ -62,11 +62,11 @@ jobs:
           EOF
 
           # 3. МАССОВЫЙ ПАТЧ ТИПОВ (Решаем ошибки со скриншотов)
-          # Удаляем .val во всех файлах драйвера (исправляет UID/GID)
+          # Удаляем .val во всех файлах драйвера (исправляет UID/GID для старых ядер)
           find drivers/kernelsu/ -type f -name "*.c" -exec sed -i 's/\.val//g' {} +
           find drivers/kernelsu/ -type f -name "*.h" -exec sed -i 's/\.val//g' {} +
           
-          # Исправляем передачу прав доступа в allowlist.c
+          # Фикс передачи прав в allowlist.c (дискард квалификатора const)
           sed -i 's/fp->f_cred/(struct cred *)fp->f_cred/g' drivers/kernelsu/allowlist.c
 
           # 4. Интеграция в дерево
@@ -75,12 +75,12 @@ jobs:
             sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
           fi
 
-          # 5. Принудительный конфиг (KPROBES необходимы для Root)
+          # 5. Конфиг KPROBES (необходимо для работы рута)
           echo "CONFIG_KPROBES=y" >> arch/arm/configs/${{ env.DEFCONFIG }}
           echo "CONFIG_KPROBE_EVENTS=y" >> arch/arm/configs/${{ env.DEFCONFIG }}
           echo "CONFIG_HAVE_KPROBES=y" >> arch/arm/configs/${{ env.DEFCONFIG }}
           
-          echo "✅ SukiSU Ultra полностью адаптирован под Certus ARM32"
+          echo "✅ SukiSU Ultra полностью подготовлен к сборке"
           
       - name: Build Kernel
         run: |
