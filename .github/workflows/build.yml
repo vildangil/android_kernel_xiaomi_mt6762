@@ -54,7 +54,7 @@ jobs:
           fi
           rm -rf tmp_ksu
 
-          # 3. Фикс архитектуры (уже работает)
+          # 3. Фикс архитектуры и добавление syscall_fn_t
           sed -i '/#error "Unsupported arch"/d' drivers/kernelsu/arch.h
           cat <<EOF >> drivers/kernelsu/arch.h
           #if defined(__arm__)
@@ -64,14 +64,15 @@ jobs:
           #define ksu_get_third_arg(regs) ((regs)->ARM_r2)
           #define ksu_get_fourth_arg(regs) ((regs)->ARM_r3)
           #endif
+          
+          /* Фикс для старых ядер: определяем тип syscall_fn_t */
+          typedef void (*syscall_fn_t)(void);
           EOF
 
-          # 4. ТОТАЛЬНЫЙ ФИКС UID/GID (Решаем ошибку .val)
-          # Удаляем .val везде: и после точки (uid.val), и после стрелки (uid->val)
-          find drivers/kernelsu -type f \( -name "*.c" -o -name "*.h" \) -exec sed -i 's/\.val//g' {} +
+          # 4. Удалено: ТОТАЛЬНЫЙ ФИКС UID/GID
+          # В ядре 4.9 kuid_t - это структура, поэтому удаление .val ломает сборку.
           
           # 5. Исправление макросов инициализации (для старых ядер)
-          # В твоем ядре KUIDT_INIT и KGIDT_INIT не нужны или работают иначе
           find drivers/kernelsu -type f -name "*.c" -exec sed -i 's/KUIDT_INIT//g' {} +
           find drivers/kernelsu -type f -name "*.c" -exec sed -i 's/KGIDT_INIT//g' {} +
 
@@ -79,6 +80,9 @@ jobs:
           if [ -f "drivers/kernelsu/allowlist.c" ]; then
             sed -i 's/fp->f_cred/(struct cred *)fp->f_cred/g' drivers/kernelsu/allowlist.c
           fi
+
+          # 6.5 Фикс MODULE_IMPORT_NS для ядер младше 5.4
+          sed -i '/MODULE_IMPORT_NS/d' drivers/kernelsu/ksu.c
 
           # 7. Интеграция в дерево сборки
           grep -q "kernelsu" drivers/Makefile || echo "obj-y += kernelsu/" >> drivers/Makefile
@@ -91,7 +95,7 @@ jobs:
           echo "CONFIG_KPROBE_EVENTS=y" >> arch/arm/configs/${{ env.DEFCONFIG }}
           echo "CONFIG_HAVE_KPROBES=y" >> arch/arm/configs/${{ env.DEFCONFIG }}
           
-          echo "✅ Все барьеры ARM32 устранены. Запускаем компиляцию."
+          echo "✅ Все барьеры ARM32 устранены. Запускаем компиляцию
           
       - name: Build Kernel
         run: |
