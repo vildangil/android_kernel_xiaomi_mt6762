@@ -43,6 +43,24 @@ jobs:
           echo "CONFIG_OVERLAY_FS=y" >> arch/arm/configs/$DEFCONFIG
           echo "CONFIG_PROFILING=y" >> arch/arm/configs/$DEFCONFIG
 
+      - name: Integrate SukiSU 3.2.0
+        run: |
+          # 1. Клонируем исходники SukiSU версии 3.2.0
+          git clone https://github.com/5ec1cff/SukiSU.git drivers/kernelsu
+          cd drivers/kernelsu
+          git checkout 3.2.0
+          cd ../..
+
+          # 2. Добавляем KernelSU в систему сборки драйверов, если его там нет
+          if ! grep -q "kernelsu" drivers/Makefile; then
+            echo "obj-y += kernelsu/" >> drivers/Makefile
+          fi
+          
+          # 3. Прописываем Kconfig
+          if ! grep -q "kernelsu" drivers/Kconfig; then
+            sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+          fi
+
       - name: Build Kernel
         run: |
           # Добавляем тулчейн в PATH
