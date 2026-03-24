@@ -51,11 +51,17 @@ jobs:
         run: |
           # Очистка
           rm -rf drivers/kernelsu
+          rm -rf tmp_ksu
           
-          # Клонируем публичный репозиторий (v0.5.2 - база для Suki 3.x)
-          # Если репозиторий 5ec1cff/SukiSU приватный, эта ссылка спасет сборку
-          git clone https://github.com/tiann/KernelSU.git drivers/kernelsu
-          cd drivers/kernelsu && git checkout v0.5.2 && cd ../..
+          # Клонируем репозиторий во временную папку
+          git clone https://github.com/tiann/KernelSU.git tmp_ksu
+          cd tmp_ksu && git checkout v0.5.2 && cd ..
+
+          # Переносим саму папку с драйвером (kernel) по нужному пути
+          mv tmp_ksu/kernel drivers/kernelsu
+          
+          # Подчищаем временную папку
+          rm -rf tmp_ksu
 
           # Проверка: если папка пуста, прерываем билд сразу
           if [ ! -f "drivers/kernelsu/Kconfig" ]; then
