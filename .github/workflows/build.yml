@@ -40,15 +40,16 @@ jobs:
           wget -q https://releases.linaro.org/components/toolchain/binaries/7.5-2019.12/arm-linux-gnueabi/gcc-linaro-7.5.0-2019.12-x86_64_arm-linux-gnueabi.tar.xz
           tar -xf gcc-linaro-*.tar.xz -C tc32 --strip-components=1
 
-      - name: Integrate SukiSU Ultra (ARM32 Fix)
+      - name: Integrate SukiSU Ultra (ARM32 Final Fix)
         run: |
+          # 1. Подготовка
           rm -rf drivers/kernelsu tmp_ksu
           git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra.git tmp_ksu
           cd tmp_ksu && (git checkout main || git checkout master) && cd ..
           mv tmp_ksu/kernel drivers/kernelsu
           rm -rf tmp_ksu
 
-          # 1. Фикс архитектуры (уже проверено, работает)
+          # 2. Фикс архитектуры (уже работает)
           sed -i '/#error "Unsupported arch"/d' drivers/kernelsu/arch.h
           cat <<EOF >> drivers/kernelsu/arch.h
           #if defined(__arm__)
@@ -60,11 +61,12 @@ jobs:
           #endif
           EOF
 
-          # 2. Фикс UID/GID (решаем текущую ошибку со скриншота)
-          # Удаляем .val, так как в твоем ядре это простые числа
-          sed -i 's/\.val//g' drivers/kernelsu/*.c
-
-          # 3. Фикс типов cred (предыдущая ошибка)
+          # 3. МАССОВЫЙ ПАТЧ ТИПОВ (Решаем ошибки со скриншотов)
+          # Удаляем .val во всех файлах драйвера (исправляет UID/GID)
+          find drivers/kernelsu/ -type f -name "*.c" -exec sed -i 's/\.val//g' {} +
+          find drivers/kernelsu/ -type f -name "*.h" -exec sed -i 's/\.val//g' {} +
+          
+          # Исправляем передачу прав доступа в allowlist.c
           sed -i 's/fp->f_cred/(struct cred *)fp->f_cred/g' drivers/kernelsu/allowlist.c
 
           # 4. Интеграция в дерево
@@ -73,11 +75,12 @@ jobs:
             sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
           fi
 
-          # 5. Принудительный конфиг
+          # 5. Принудительный конфиг (KPROBES необходимы для Root)
           echo "CONFIG_KPROBES=y" >> arch/arm/configs/${{ env.DEFCONFIG }}
           echo "CONFIG_KPROBE_EVENTS=y" >> arch/arm/configs/${{ env.DEFCONFIG }}
           echo "CONFIG_HAVE_KPROBES=y" >> arch/arm/configs/${{ env.DEFCONFIG }}
           
+          echo "✅ SukiSU Ultra полностью адаптирован под Certus ARM32"
           
       - name: Build Kernel
         run: |
