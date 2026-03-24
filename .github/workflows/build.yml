@@ -96,7 +96,7 @@ jobs:
           echo "CONFIG_KPROBE_EVENTS=y" >> arch/arm/configs/${{ env.DEFCONFIG }}
           echo "CONFIG_HAVE_KPROBES=y" >> arch/arm/configs/${{ env.DEFCONFIG }}
           
-          echo "✅ Все барьеры ARM32 устранены. Запускаем компиляцию
+          echo "✅ Все барьеры ARM32 устранены. Запускаем компиляцию"
           
       - name: Build Kernel
         run: |
