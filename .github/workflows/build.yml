@@ -49,34 +49,33 @@ jobs:
 
       - name: Integrate SukiSU
         env:
-          # Убедись, что ты создал секрет GH_PAT в настройках репозитория!
-          GH_TOKEN: ${{ secrets.GH_PAT }} 
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
-          # 1. Очистка старых следов
-          rm -rf drivers/kernelsu
-          rm -rf tmp_ksu
+          # 1. Очистка
+          rm -rf drivers/kernelsu tmp_ksu
           
-          # 2. Клонирование с использованием токена
-          # Мы используем переменную GH_TOKEN, которую объявили выше в env
-          git clone "https://x-access-token:${GH_TOKEN}@github.com/5ec1cff/SukiSU.git" tmp_ksu
+          # 2. Клонирование через заголовок (самый стабильный способ)
+          git -c http.extraheader="AUTHORIZATION: bearer ${GH_TOKEN}" \
+            clone https://github.com/5ec1cff/SukiSU.git tmp_ksu
           
-          # 3. Переход на нужную ветку и перенос файлов
+          # 3. Проверка: если клонирование не удалось, выходим
+          if [ ! -d "tmp_ksu" ]; then
+            echo "❌ Ошибка: Не удалось клонировать репозиторий. Проверь GH_PAT!"
+            exit 1
+          fi
+
+          # 4. Переход на ветку и перенос исходников
+          # В SukiSU обычно используется ветка main или v3
           cd tmp_ksu && git checkout main && cd ..
           mv tmp_ksu/kernel drivers/kernelsu
           rm -rf tmp_ksu
-
-          # 4. Проверка, что файл на месте
-          if [ ! -f "drivers/kernelsu/Kconfig" ]; then
-            echo "❌ Ошибка: Файл drivers/kernelsu/Kconfig не найден!"
-            exit 1
-          fi
 
           # 5. Интеграция в дерево сборки
           grep -q "kernelsu" drivers/Makefile || echo "obj-y += kernelsu/" >> drivers/Makefile
           if ! grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig; then
             sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
           fi
-          echo "✅ SukiSU успешно интегрирован"
+          echo "✅ SukiSU (32-bit compatible) успешно интегрирован"
 
       - name: Build Kernel
         run: |
@@ -100,6 +99,7 @@ jobs:
           ./scripts/config --file out/.config --enable CONFIG_KPROBES
           ./scripts/config --file out/.config --enable CONFIG_HAVE_KPROBES
           ./scripts/config --file out/.config --enable CONFIG_KPROBE_EVENTS
+          ./scripts/config --file out/.config --enable CONFIG_MODULES
 
           # Обновляем конфиг, чтобы подтянуть зависимости для SukiSU
           make O=out ARCH=arm olddefconfig
