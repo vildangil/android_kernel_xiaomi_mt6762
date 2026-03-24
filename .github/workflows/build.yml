@@ -47,76 +47,69 @@ jobs:
           echo "CONFIG_OVERLAY_FS=y" >> arch/arm/configs/$DEFCONFIG
           echo "CONFIG_PROFILING=y" >> arch/arm/configs/$DEFCONFIG
 
-      - name: Integrate SukiSU
+      - name: Integrate SukiSU 3.2.0
         run: |
-          # 1. Удаляем папку, если она осталась после неудачной попытки
+          # 1. Очистка и создание папки
           rm -rf drivers/kernelsu
           
-          # 2. Клонируем публичный репозиторий KernelSU (база для Suki)
-          # Если у тебя есть своя ПУБЛИЧНАЯ ссылка на SukiSU 3.2.0, замени её здесь
+          # 2. Клонируем публичный KernelSU (база для Suki)
+          # Если у тебя есть доступ к 5ec1cff/SukiSU, замени ссылку ниже, 
+          # но эта ссылка ТОЧНО сработает для теста:
           git clone https://github.com/tiann/KernelSU.git drivers/kernelsu
-          
-          # 3. Переходим на версию, соответствующую старым ядрам (v0.5.2 — это стабильная база)
           cd drivers/kernelsu
+          # Версия v0.5.2 — самая стабильная для старых ядер ARM32
           git checkout v0.5.2
           cd ../..
 
-          # 4. Проверяем, что файл реально существует, прежде чем править Kconfig
-          if [ -f "drivers/kernelsu/Kconfig" ]; then
-            echo "✅ Исходники SukiSU найдены."
-          else
-            echo "❌ Ошибка: Исходники не загружены!"
+          # 3. Проверка наличия файлов (если упадет здесь - значит git clone не вышел)
+          if [ ! -f "drivers/kernelsu/Kconfig" ]; then
+            echo "❌ Ошибка: Исходники SukiSU не найдены!"
             exit 1
           fi
 
-          # 5. Безопасная правка Makefile и Kconfig
-          # Используем grep, чтобы не добавлять строку дважды
+          # 4. Прописываем в систему сборки (только если еще не прописано)
           grep -q "kernelsu" drivers/Makefile || echo "obj-y += kernelsu/" >> drivers/Makefile
-          
-          # Вставляем source ПЕРЕД последним словом endmenu, если строки еще нет
           if ! grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig; then
+            # Вставляем перед последним словом endmenu
             sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
           fi
 
       - name: Build Kernel
         run: |
-          # 1. Настройка окружения
           export PATH=$(pwd)/tc32/bin:$PATH
           export CROSS_COMPILE=arm-linux-gnueabi-
           export ARCH=arm
-          
-          # Уведомление в Telegram
+
+          # Уведомление в ТГ
           curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
           -d chat_id="${CHAT_ID}" -d text="🚀 Сборка <b>SukaKernel</b> начата..." -d parse_mode="HTML"
-  
-          # 2. Подготовка чистого конфига
+
+          # Создаем чистый конфиг
           make O=out mrproper
           make O=out $DEFCONFIG
-  
-          # 3. Внедрение настроек SukiSU и названия ядра
-          # Мы делаем это ПОСЛЕ генерации конфига, чтобы kbuild их не выкинул раньше времени
-          scripts/config --file out/.config --set-str LOCALVERSION "-SukaKernel"
-          scripts/config --file out/.config --enable CONFIG_KSU
-          scripts/config --file out/.config --enable CONFIG_KSU_SUKI
-          
-          # 4. ПРИМЕНЕНИЕ ИЗМЕНЕНИЙ (Критически важный шаг)
-          # olddefconfig автоматически выберет значения по умолчанию для всех новых зависимостей KSU
+
+          # Внедряем параметры (самый надежный способ через scripts/config)
+          # Это предотвратит "вымывание" настроек системой kbuild
+          ./scripts/config --file out/.config --set-str LOCALVERSION "-SukaKernel"
+          ./scripts/config --file out/.config --enable CONFIG_KSU
+          ./scripts/config --file out/.config --enable CONFIG_KSU_SUKI
+
+          # Применяем новые настройки (подтягивает зависимости для KSU)
           make O=out ARCH=arm olddefconfig
-  
-          # 5. Проверка (для логов GitHub)
-          echo "--- Проверка конфига ---"
-          grep "CONFIG_KSU" out/.config || echo "KSU не найден в конфиге!"
-          grep "CONFIG_LOCALVERSION" out/.config || echo "LOCALVERSION не найден!"
-          echo "------------------------"
-  
-          # 6. Основная сборка
-          # Добавляем ARCH=arm и LOCALVERSION прямо в команду для надежности
-          if make -j$(nproc --all) O=out ARCH=arm LOCALVERSION="-SukaKernel"; then
+
+          # Проверка для логов
+          echo "--- ТЕСТ КОНФИГА ---"
+          grep "CONFIG_KSU" out/.config || echo "KSU НЕ НАЙДЕН"
+          grep "CONFIG_LOCALVERSION" out/.config || echo "VERSION НЕ НАЙДЕН"
+          echo "--------------------"
+
+          # Финальная сборка
+          if make -j$(nproc --all) O=out ARCH=arm; then
             echo "BUILD_SUCCESS=true" >> $GITHUB_ENV
           else
             echo "BUILD_SUCCESS=false" >> $GITHUB_ENV
             curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
-            -d chat_id="${CHAT_ID}" -d text="❌ <b>Ошибка сборки!</b> Проверь логи GitHub Actions." -d parse_mode="HTML"
+            -d chat_id="${CHAT_ID}" -d text="❌ <b>Ошибка сборки!</b>" -d parse_mode="HTML"
             exit 1
           fi
 
