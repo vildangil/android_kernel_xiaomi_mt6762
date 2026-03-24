@@ -16,13 +16,14 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout Source
-        uses: actions/checkout@v4
 
       - name: Script started
         run: |
           curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
           -d chat_id="${CHAT_ID}" -d text="Скрипт запущен" -d parse_mode="HTML"
+          
+      - name: Checkout Source
+        uses: actions/checkout@v4
           
       - name: Install Dependencies
         run: |
