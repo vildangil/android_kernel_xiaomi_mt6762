@@ -1,0 +1,118 @@
+name: SukaKernel (Clang Edition)
+
+on:
+  workflow_dispatch:
+
+env:
+  TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+  CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+  DEVICE: Certus
+  DEFCONFIG: certus_defconfig
+  ARCH: arm
+  # Ссылки на инструменты
+  CLANG_URL: https://github.com/kdrag0n/proton-clang/archive/refs/heads/master.tar.gz
+  AK3_REPO: https://github.com/xiaomi-mt6765-devs/AnyKernel3
+
+jobs:
+  kernel-build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
+          build-essential bc bison flex libssl-dev libelf-dev \
+          git zip curl wget tar python3 python2 unzip ca-certificates \
+          cpio lz4 libncurses5-dev
+          sudo ln -sf /usr/bin/python2 /usr/bin/python
+          
+      - name: Download Proton Clang
+        run: |
+          mkdir -p clang
+          wget -q ${{ env.CLANG_URL }} -O clang.tar.gz
+          tar -xf clang.tar.gz -C clang --strip-components=1
+          
+      - name: Integrate SukiSU Ultra (Final Fix)
+        run: |
+          # 1. Клонируем и переносим
+          rm -rf drivers/kernelsu tmp_ksu
+          git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra.git tmp_ksu
+          mv tmp_ksu/kernel drivers/kernelsu && rm -rf tmp_ksu
+
+          # 2. Форсированная вставка типа syscall_fn_t во все проблемные файлы
+          # Это 100% решит ошибку "unknown type name ‘syscall_fn_t’"
+          FILES_TO_PATCH=$(grep -r "syscall_fn_t" drivers/kernelsu/hook/ -l)
+          for file in $FILES_TO_PATCH; do
+            sed -i '1i typedef void (*syscall_fn_t)(void);' "$file"
+          done
+
+          # 3. Фикс архитектуры ARM32
+          sed -i '/#error "Unsupported arch"/d' drivers/kernelsu/arch.h
+          cat <<EOF >> drivers/kernelsu/arch.h
+          #if defined(__arm__)
+          #define ksu_get_syscall_nr(regs) ((regs)->ARM_r7)
+          #define ksu_get_first_arg(regs) ((regs)->ARM_r0)
+          #define ksu_get_second_arg(regs) ((regs)->ARM_r1)
+          #define ksu_get_third_arg(regs) ((regs)->ARM_r2)
+          #define ksu_get_fourth_arg(regs) ((regs)->ARM_r3)
+          #endif
+          EOF
+
+          # 4. Удаление MODULE_IMPORT_NS и фикс типов cred
+          sed -i '/MODULE_IMPORT_NS/d' drivers/kernelsu/ksu.c
+          if [ -f "drivers/kernelsu/allowlist.c" ]; then
+            sed -i 's/fp->f_cred/(struct cred *)fp->f_cred/g' drivers/kernelsu/allowlist.c
+          fi
+
+          # 5. Интеграция в Makefile
+          grep -q "kernelsu" drivers/Makefile || echo "obj-y += kernelsu/" >> drivers/Makefile
+          
+      - name: Build Kernel (Clang)
+        run: |
+          export PATH=$(pwd)/clang/bin:$PATH
+          # Настройка аргументов для Clang
+          CLANG_ARGS="ARCH=arm \
+                     CC=clang \
+                     CROSS_COMPILE=arm-linux-gnueabi- \
+                     CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+                     AR=llvm-ar \
+                     NM=llvm-nm \
+                     OBJCOPY=llvm-objcopy \
+                     OBJDUMP=llvm-objdump \
+                     STRIP=llvm-strip"
+
+          curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+          -d chat_id="${CHAT_ID}" -d text="🚀 Сборка <b>SukaKernel</b> (Clang) начата..." -d parse_mode="HTML"
+
+          make O=out mrproper
+          make O=out $DEFCONFIG
+          
+          # Включаем SukiSU и LOCALVERSION
+          ./scripts/config --file out/.config --set-str LOCALVERSION "-SukaKernel"
+          ./scripts/config --file out/.config --enable CONFIG_KSU
+          ./scripts/config --file out/.config --enable CONFIG_KSU_SUKI
+          
+          make -j$(nproc --all) O=out $CLANG_ARGS || exit 1
+          echo "BUILD_SUCCESS=true" >> $GITHUB_ENV
+          
+      - name: Package with Specific AnyKernel3
+        if: env.BUILD_SUCCESS == 'true'
+        run: |
+          git clone ${{ env.AK3_REPO }} ak3
+          # Копируем ядро (для ARM обычно zImage или zImage-dtb)
+          if [ -f out/arch/arm/boot/zImage-dtb ]; then
+            cp out/arch/arm/boot/zImage-dtb ak3/zImage
+          else
+            cp out/arch/arm/boot/zImage ak3/zImage
+          fi
+          cd ak3 && zip -r9 ../${DEVICE}-SukaKernel.zip * -x .git/*
+          
+      - name: Send to Telegram
+        if: env.BUILD_SUCCESS == 'true'
+        run: |
+          curl -F document=@"${{ github.workspace }}/${{ env.DEVICE }}-SukaKernel.zip" \
+          "https://api.telegram.org/bot${TOKEN}/sendDocument?chat_id=${CHAT_ID}&caption=✅+Готово!+Использован+MT6765+AnyKernel3"
