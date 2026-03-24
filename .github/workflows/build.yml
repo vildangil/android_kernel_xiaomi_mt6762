@@ -45,11 +45,16 @@ jobs:
           # 1. Подготовка
           rm -rf drivers/kernelsu tmp_ksu
           git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra.git tmp_ksu
-          cd tmp_ksu && (git checkout main || git checkout master) && cd ..
-          mv tmp_ksu/kernel drivers/kernelsu
+          
+          # 2. Определяем, где лежат исходники (в некоторых версиях SukiSU папка называется по-разному)
+          if [ -d "tmp_ksu/kernel" ]; then
+            mv tmp_ksu/kernel drivers/kernelsu
+          else
+            mv tmp_ksu drivers/kernelsu
+          fi
           rm -rf tmp_ksu
 
-          # 2. Фикс архитектуры (уже работает)
+          # 3. ФИКС АРХИТЕКТУРЫ (уже проверено)
           sed -i '/#error "Unsupported arch"/d' drivers/kernelsu/arch.h
           cat <<EOF >> drivers/kernelsu/arch.h
           #if defined(__arm__)
@@ -61,27 +66,28 @@ jobs:
           #endif
           EOF
 
-          # 3. ТОТАЛЬНЫЙ ФИКС UID/GID (Решаем ошибку .val)
-          # Проходим по всем .c и .h файлам и удаляем .val там, где это касается UID/GID
-          # Используем расширенное регулярное выражение для надежности
-          find drivers/kernelsu/ -type f \( -name "*.c" -o -name "*.h" \) -exec sed -i 's/\.val//g' {} +
+          # 4. ТОТАЛЬНЫЙ ФИКС UID/GID (Решаем ошибку .val во всех файлах)
+          # Рекурсивно ищем все .c и .h файлы и удаляем .val
+          find drivers/kernelsu -type f \( -name "*.c" -o -name "*.h" \) -exec sed -i 's/\.val//g' {} +
           
-          # 4. Фикс типов cred в allowlist.c
-          # Это предотвращает ошибку с const квалификатором
-          sed -i 's/fp->f_cred/(struct cred *)fp->f_cred/g' drivers/kernelsu/allowlist.c
+          # 5. ФИКС ТИПОВ В allowlist.c
+          # Исправляем ошибку "discards qualifiers" (const struct cred)
+          if [ -f "drivers/kernelsu/allowlist.c" ]; then
+            sed -i 's/fp->f_cred/(struct cred *)fp->f_cred/g' drivers/kernelsu/allowlist.c
+          fi
 
-          # 5. Интеграция в Makefile и Kconfig
+          # 6. Интеграция в Makefile и Kconfig
           grep -q "kernelsu" drivers/Makefile || echo "obj-y += kernelsu/" >> drivers/Makefile
           if ! grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig; then
             sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
           fi
 
-          # 6. Конфиг KPROBES (необходимо для работы рута)
+          # 7. Конфиг KPROBES (критично для работы Root)
           echo "CONFIG_KPROBES=y" >> arch/arm/configs/${{ env.DEFCONFIG }}
           echo "CONFIG_KPROBE_EVENTS=y" >> arch/arm/configs/${{ env.DEFCONFIG }}
           echo "CONFIG_HAVE_KPROBES=y" >> arch/arm/configs/${{ env.DEFCONFIG }}
           
-          echo "✅ Все патчи применены. Начинаем сборку..."
+          echo "✅ Все патчи применены рекурсивно. Начинаем сборку..."
           
       - name: Build Kernel
         run: |
