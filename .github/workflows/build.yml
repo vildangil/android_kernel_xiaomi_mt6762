@@ -41,14 +41,14 @@ jobs:
           wget -q https://releases.linaro.org/components/toolchain/binaries/7.5-2019.12/arm-linux-gnueabi/gcc-linaro-7.5.0-2019.12-x86_64_arm-linux-gnueabi.tar.xz
           tar -xf gcc-linaro-*.tar.xz -C tc32 --strip-components=1
           
-      - name: Integrate SukiSU Ultra
+      - name: Integrate SukiSU Ultra (ARM32 Hook Fix)
         run: |
-          # 1. Чистая подготовка
+          # 1. Подготовка
           rm -rf drivers/kernelsu tmp_ksu
           git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra.git tmp_ksu
           mv tmp_ksu/kernel drivers/kernelsu && rm -rf tmp_ksu
 
-          # 2. Фикс архитектуры и типов (добавляем syscall_fn_t)
+          # 2. Фикс архитектуры в arch.h
           sed -i '/#error "Unsupported arch"/d' drivers/kernelsu/arch.h
           cat <<EOF >> drivers/kernelsu/arch.h
           #if defined(__arm__)
@@ -57,34 +57,32 @@ jobs:
           #define ksu_get_second_arg(regs) ((regs)->ARM_r1)
           #define ksu_get_third_arg(regs) ((regs)->ARM_r2)
           #define ksu_get_fourth_arg(regs) ((regs)->ARM_r3)
-          typedef void (*syscall_fn_t)(void);
           #endif
           EOF
 
-          # 3. Удаляем MODULE_IMPORT_NS (его нет в ядре 4.9)
+          # 3. ГЛОБАЛЬНЫЙ ФИКС syscall_fn_t (вставляем в начало файла хуков)
+          # Это решит ошибку "unknown type name ‘syscall_fn_t’"
+          sed -i '1i typedef void (*syscall_fn_t)(void);' drivers/kernelsu/hook/syscall_hook.h
+
+          # 4. Фикс MODULE_IMPORT_NS (для ядер ниже 5.4)
           sed -i '/MODULE_IMPORT_NS/d' drivers/kernelsu/ksu.c
 
-          # 4. Фикс UID/GID (отменяем прошлый 'sed' и фиксим инициализацию)
-          # Мы НЕ удаляем .val, так как это ломает логику структуры kuid_t
+          # 5. Исправление типов для 4.9 (инициализация ID)
           find drivers/kernelsu -type f -name "*.c" -exec sed -i 's/KUIDT_INIT//g' {} +
           find drivers/kernelsu -type f -name "*.c" -exec sed -i 's/KGIDT_INIT//g' {} +
 
-          # 5. Фикс типов в allowlist.c (приведение к (struct cred *))
+          # 6. Фикс allowlist.c (приведение типов cred)
           if [ -f "drivers/kernelsu/allowlist.c" ]; then
             sed -i 's/fp->f_cred/(struct cred *)fp->f_cred/g' drivers/kernelsu/allowlist.c
           fi
 
-          # 6. Интеграция в дерево сборки
+          # 7. Интеграция в Makefile и Kconfig
           grep -q "kernelsu" drivers/Makefile || echo "obj-y += kernelsu/" >> drivers/Makefile
           if ! grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig; then
             sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
           fi
-
-          # 7. Включаем необходимые опции в конфиг
-          echo "CONFIG_KPROBES=y" >> arch/arm/configs/${{ env.DEFCONFIG }}
-          echo "CONFIG_KPROBE_EVENTS=y" >> arch/arm/configs/${{ env.DEFCONFIG }}
           
-          echo "✅ Патчи применены. Повторяем попытку."
+          echo "✅ Типы данных исправлены. Запускаем сборку."
           
       - name: Build Kernel
         run: |
