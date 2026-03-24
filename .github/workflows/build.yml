@@ -35,6 +35,14 @@ jobs:
           wget -q https://releases.linaro.org/components/toolchain/binaries/7.5-2019.12/arm-linux-gnueabi/gcc-linaro-7.5.0-2019.12-x86_64_arm-linux-gnueabi.tar.xz
           tar -xf gcc-linaro-*.tar.xz -C tc32 --strip-components=1
 
+      - name: echo ksu
+        run: |
+          echo "CONFIG_KSU=y" >> arch/arm/configs/$DEFCONFIG
+          echo "CONFIG_KSU_SUKI=y" >> arch/arm/configs/$DEFCONFIG
+          echo "CONFIG_LOCALVERSION=\"-SukaKernel\"" >> arch/arm/configs/$DEFCONFIG
+          echo "CONFIG_OVERLAY_FS=y" >> arch/arm/configs/$DEFCONFIG
+          echo "CONFIG_PROFILING=y" >> arch/arm/configs/$DEFCONFIG
+
       - name: Build Kernel
         run: |
           # Добавляем тулчейн в PATH
