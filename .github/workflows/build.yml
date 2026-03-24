@@ -47,30 +47,27 @@ jobs:
           echo "CONFIG_OVERLAY_FS=y" >> arch/arm/configs/$DEFCONFIG
           echo "CONFIG_PROFILING=y" >> arch/arm/configs/$DEFCONFIG
 
-      - name: Integrate SukiSU 3.2.0
+      - name: Integrate SukiSU
         run: |
-          # 1. Очистка и создание папки
+          # Очистка
           rm -rf drivers/kernelsu
           
-          # 2. Клонируем публичный KernelSU (база для Suki)
-          # Если у тебя есть доступ к 5ec1cff/SukiSU, замени ссылку ниже, 
-          # но эта ссылка ТОЧНО сработает для теста:
+          # Клонируем публичный репозиторий (v0.5.2 - база для Suki 3.x)
+          # Если репозиторий 5ec1cff/SukiSU приватный, эта ссылка спасет сборку
           git clone https://github.com/tiann/KernelSU.git drivers/kernelsu
-          cd drivers/kernelsu
-          # Версия v0.5.2 — самая стабильная для старых ядер ARM32
-          git checkout v0.5.2
-          cd ../..
+          cd drivers/kernelsu && git checkout v0.5.2 && cd ../..
 
-          # 3. Проверка наличия файлов (если упадет здесь - значит git clone не вышел)
+          # Проверка: если папка пуста, прерываем билд сразу
           if [ ! -f "drivers/kernelsu/Kconfig" ]; then
-            echo "❌ Ошибка: Исходники SukiSU не найдены!"
+            echo "❌ Ошибка: Исходники SukiSU не загружены! Проверь доступ к репозиторию."
             exit 1
           fi
 
-          # 4. Прописываем в систему сборки (только если еще не прописано)
+          # Интеграция в Makefile
           grep -q "kernelsu" drivers/Makefile || echo "obj-y += kernelsu/" >> drivers/Makefile
+          
+          # Интеграция в Kconfig (вставляем ПЕРЕД последним endmenu)
           if ! grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig; then
-            # Вставляем перед последним словом endmenu
             sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
           fi
 
@@ -80,36 +77,30 @@ jobs:
           export CROSS_COMPILE=arm-linux-gnueabi-
           export ARCH=arm
 
-          # Уведомление в ТГ
+          # Уведомление в Telegram
           curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
           -d chat_id="${CHAT_ID}" -d text="🚀 Сборка <b>SukaKernel</b> начата..." -d parse_mode="HTML"
 
-          # Создаем чистый конфиг
+          # Подготовка
           make O=out mrproper
           make O=out $DEFCONFIG
 
-          # Внедряем параметры (самый надежный способ через scripts/config)
-          # Это предотвратит "вымывание" настроек системой kbuild
+          # Принудительная установка параметров через штатный скрипт ядра
+          # Это гарантирует, что название будет "SukaKernel" и KSU включится
           ./scripts/config --file out/.config --set-str LOCALVERSION "-SukaKernel"
           ./scripts/config --file out/.config --enable CONFIG_KSU
           ./scripts/config --file out/.config --enable CONFIG_KSU_SUKI
 
-          # Применяем новые настройки (подтягивает зависимости для KSU)
+          # Обновляем конфиг, чтобы подтянуть зависимости для SukiSU
           make O=out ARCH=arm olddefconfig
 
-          # Проверка для логов
-          echo "--- ТЕСТ КОНФИГА ---"
-          grep "CONFIG_KSU" out/.config || echo "KSU НЕ НАЙДЕН"
-          grep "CONFIG_LOCALVERSION" out/.config || echo "VERSION НЕ НАЙДЕН"
-          echo "--------------------"
-
-          # Финальная сборка
+          # Сборка
           if make -j$(nproc --all) O=out ARCH=arm; then
             echo "BUILD_SUCCESS=true" >> $GITHUB_ENV
           else
             echo "BUILD_SUCCESS=false" >> $GITHUB_ENV
             curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
-            -d chat_id="${CHAT_ID}" -d text="❌ <b>Ошибка сборки!</b>" -d parse_mode="HTML"
+            -d chat_id="${CHAT_ID}" -d text="❌ <b>Ошибка сборки SukaKernel</b>" -d parse_mode="HTML"
             exit 1
           fi
 
