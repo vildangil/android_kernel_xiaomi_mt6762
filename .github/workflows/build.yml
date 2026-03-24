@@ -48,24 +48,34 @@ jobs:
           echo "CONFIG_PROFILING=y" >> arch/arm/configs/$DEFCONFIG
 
       - name: Integrate SukiSU
+        env:
+          # Токен нужен для доступа к приватному репозиторию
+          GH_TOKEN: ${{ secrets.GH_PAT }} 
         run: |
           # Очистка
           rm -rf drivers/kernelsu
           rm -rf tmp_ksu
           
-          # Клонируем репозиторий во временную папку
-          git clone https://github.com/tiann/KernelSU.git tmp_ksu
-          cd tmp_ksu && git checkout v0.5.2 && cd ..
+          # Клонируем форк с поддержкой 32-бит (твой SukiSU)
+          # Используем токен для авторизации:
+          git clone https://${GH_TOKEN}@github.com/5ec1cff/SukiSU.git tmp_ksu
+          
+          # Альтернатива: публичный форк rsuntk (специально для arm32)
+          # Раскомментируй строку ниже, если 5ec1cff/SukiSU не сработает:
+          # git clone https://github.com/rsuntk/KernelSU.git tmp_ksu
+          
+          # Переходим в папку и чекаутим нужную ветку/версию (укажи свою при необходимости)
+          cd tmp_ksu && git checkout main && cd ..
 
           # Переносим саму папку с драйвером (kernel) по нужному пути
           mv tmp_ksu/kernel drivers/kernelsu
           
-          # Подчищаем временную папку
+          # Подчищаем временную директорию
           rm -rf tmp_ksu
 
-          # Проверка: если папка пуста, прерываем билд сразу
+          # Проверка на успешную загрузку
           if [ ! -f "drivers/kernelsu/Kconfig" ]; then
-            echo "❌ Ошибка: Исходники SukiSU не загружены! Проверь доступ к репозиторию."
+            echo "❌ Ошибка: Исходники SukiSU не загружены! Проверь токен и доступ к репозиторию."
             exit 1
           fi
 
