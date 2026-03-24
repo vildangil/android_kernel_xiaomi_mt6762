@@ -41,21 +41,14 @@ jobs:
           wget -q https://releases.linaro.org/components/toolchain/binaries/7.5-2019.12/arm-linux-gnueabi/gcc-linaro-7.5.0-2019.12-x86_64_arm-linux-gnueabi.tar.xz
           tar -xf gcc-linaro-*.tar.xz -C tc32 --strip-components=1
           
-      - name: Integrate SukiSU Ultra (ARM32 Absolute Fix)
+      - name: Integrate SukiSU Ultra
         run: |
-          # 1. Подготовка
+          # 1. Чистая установка
           rm -rf drivers/kernelsu tmp_ksu
           git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra.git tmp_ksu
-          
-          # 2. Перенос исходников (проверяем структуру папок)
-          if [ -d "tmp_ksu/kernel" ]; then
-            mv tmp_ksu/kernel drivers/kernelsu
-          else
-            mv tmp_ksu drivers/kernelsu
-          fi
-          rm -rf tmp_ksu
+          mv tmp_ksu/kernel drivers/kernelsu && rm -rf tmp_ksu
 
-          # 3. Фикс архитектуры и добавление syscall_fn_t
+          # 2. Исправляем arch.h (добавляем недостающий тип для ARM32)
           sed -i '/#error "Unsupported arch"/d' drivers/kernelsu/arch.h
           cat <<EOF >> drivers/kernelsu/arch.h
           #if defined(__arm__)
@@ -64,39 +57,25 @@ jobs:
           #define ksu_get_second_arg(regs) ((regs)->ARM_r1)
           #define ksu_get_third_arg(regs) ((regs)->ARM_r2)
           #define ksu_get_fourth_arg(regs) ((regs)->ARM_r3)
-          #endif
-          
-          /* Фикс для старых ядер: определяем тип syscall_fn_t */
           typedef void (*syscall_fn_t)(void);
+          #endif
           EOF
 
-          # 4. Удалено: ТОТАЛЬНЫЙ ФИКС UID/GID
-          # В ядре 4.9 kuid_t - это структура, поэтому удаление .val ломает сборку.
-          
-          # 5. Исправление макросов инициализации (для старых ядер)
-          find drivers/kernelsu -type f -name "*.c" -exec sed -i 's/KUIDT_INIT//g' {} +
-          find drivers/kernelsu -type f -name "*.c" -exec sed -i 's/KGIDT_INIT//g' {} +
+          # 3. Фикс MODULE_IMPORT_NS (его нет в 4.9)
+          sed -i '/MODULE_IMPORT_NS/d' drivers/kernelsu/ksu.c
 
-          # 6. Фикс типов в allowlist.c (ошибка const struct cred)
+          # 4. Фикс типов в allowlist.c (решаем ошибку с f_cred)
           if [ -f "drivers/kernelsu/allowlist.c" ]; then
             sed -i 's/fp->f_cred/(struct cred *)fp->f_cred/g' drivers/kernelsu/allowlist.c
           fi
 
-          # 6.5 Фикс MODULE_IMPORT_NS для ядер младше 5.4
-          sed -i '/MODULE_IMPORT_NS/d' drivers/kernelsu/ksu.c
-
-          # 7. Интеграция в дерево сборки
+          # 5. Интеграция в дерево
           grep -q "kernelsu" drivers/Makefile || echo "obj-y += kernelsu/" >> drivers/Makefile
           if ! grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig; then
             sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
           fi
-
-          # 8. Конфиг KPROBES (необходимо для работы Root)
-          echo "CONFIG_KPROBES=y" >> arch/arm/configs/${{ env.DEFCONFIG }}
-          echo "CONFIG_KPROBE_EVENTS=y" >> arch/arm/configs/${{ env.DEFCONFIG }}
-          echo "CONFIG_HAVE_KPROBES=y" >> arch/arm/configs/${{ env.DEFCONFIG }}
           
-          echo "✅ Все барьеры ARM32 устранены. Запускаем компиляцию"
+          echo "✅ Патчи применены. Пробуем собрать еще раз."
           
       - name: Build Kernel
         run: |
