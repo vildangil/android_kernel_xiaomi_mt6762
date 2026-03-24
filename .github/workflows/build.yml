@@ -43,12 +43,12 @@ jobs:
           
       - name: Integrate SukiSU Ultra
         run: |
-          # 1. Чистая установка
+          # 1. Чистая подготовка
           rm -rf drivers/kernelsu tmp_ksu
           git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra.git tmp_ksu
           mv tmp_ksu/kernel drivers/kernelsu && rm -rf tmp_ksu
 
-          # 2. Исправляем arch.h (добавляем недостающий тип для ARM32)
+          # 2. Фикс архитектуры и типов (добавляем syscall_fn_t)
           sed -i '/#error "Unsupported arch"/d' drivers/kernelsu/arch.h
           cat <<EOF >> drivers/kernelsu/arch.h
           #if defined(__arm__)
@@ -61,21 +61,30 @@ jobs:
           #endif
           EOF
 
-          # 3. Фикс MODULE_IMPORT_NS (его нет в 4.9)
+          # 3. Удаляем MODULE_IMPORT_NS (его нет в ядре 4.9)
           sed -i '/MODULE_IMPORT_NS/d' drivers/kernelsu/ksu.c
 
-          # 4. Фикс типов в allowlist.c (решаем ошибку с f_cred)
+          # 4. Фикс UID/GID (отменяем прошлый 'sed' и фиксим инициализацию)
+          # Мы НЕ удаляем .val, так как это ломает логику структуры kuid_t
+          find drivers/kernelsu -type f -name "*.c" -exec sed -i 's/KUIDT_INIT//g' {} +
+          find drivers/kernelsu -type f -name "*.c" -exec sed -i 's/KGIDT_INIT//g' {} +
+
+          # 5. Фикс типов в allowlist.c (приведение к (struct cred *))
           if [ -f "drivers/kernelsu/allowlist.c" ]; then
             sed -i 's/fp->f_cred/(struct cred *)fp->f_cred/g' drivers/kernelsu/allowlist.c
           fi
 
-          # 5. Интеграция в дерево
+          # 6. Интеграция в дерево сборки
           grep -q "kernelsu" drivers/Makefile || echo "obj-y += kernelsu/" >> drivers/Makefile
           if ! grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig; then
             sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
           fi
+
+          # 7. Включаем необходимые опции в конфиг
+          echo "CONFIG_KPROBES=y" >> arch/arm/configs/${{ env.DEFCONFIG }}
+          echo "CONFIG_KPROBE_EVENTS=y" >> arch/arm/configs/${{ env.DEFCONFIG }}
           
-          echo "✅ Патчи применены. Пробуем собрать еще раз."
+          echo "✅ Патчи применены. Повторяем попытку."
           
       - name: Build Kernel
         run: |
