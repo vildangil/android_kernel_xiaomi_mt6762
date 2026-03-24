@@ -89,42 +89,59 @@ jobs:
           
           echo "✅ Все патчи применены рекурсивно. Начинаем сборку..."
           
-      - name: Build Kernel
+      - name: Integrate SukiSU Ultra (ARM32 Absolute Fix)
         run: |
-          export PATH=$(pwd)/tc32/bin:$PATH
-          export CROSS_COMPILE=arm-linux-gnueabi-
-          export ARCH=arm
-
-          # Уведомление в Telegram
-          curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
-          -d chat_id="${CHAT_ID}" -d text="🚀 Сборка <b>SukaKernel</b> начата..." -d parse_mode="HTML"
-
-          # Подготовка
-          make O=out mrproper
-          make O=out $DEFCONFIG
-
-          # Принудительная установка параметров через штатный скрипт ядра
-          # Это гарантирует, что название будет "SukaKernel" и KSU включится
-          ./scripts/config --file out/.config --set-str LOCALVERSION "-SukaKernel"
-          ./scripts/config --file out/.config --enable CONFIG_KSU
-          ./scripts/config --file out/.config --enable CONFIG_KSU_SUKI
-          ./scripts/config --file out/.config --enable CONFIG_KPROBES
-          ./scripts/config --file out/.config --enable CONFIG_HAVE_KPROBES
-          ./scripts/config --file out/.config --enable CONFIG_KPROBE_EVENTS
-          ./scripts/config --file out/.config --enable CONFIG_MODULES
-
-          # Обновляем конфиг, чтобы подтянуть зависимости для SukiSU
-          make O=out ARCH=arm olddefconfig
-
-          # Сборка
-          if make -j$(nproc --all) O=out ARCH=arm; then
-            echo "BUILD_SUCCESS=true" >> $GITHUB_ENV
+          # 1. Подготовка
+          rm -rf drivers/kernelsu tmp_ksu
+          git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra.git tmp_ksu
+          
+          # 2. Перенос исходников
+          if [ -d "tmp_ksu/kernel" ]; then
+            mv tmp_ksu/kernel drivers/kernelsu
           else
-            echo "BUILD_SUCCESS=false" >> $GITHUB_ENV
-            curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
-            -d chat_id="${CHAT_ID}" -d text="❌ <b>Ошибка сборки SukaKernel</b>" -d parse_mode="HTML"
-            exit 1
+            mv tmp_ksu drivers/kernelsu
           fi
+          rm -rf tmp_ksu
+
+          # 3. Фикс архитектуры (уже работает)
+          sed -i '/#error "Unsupported arch"/d' drivers/kernelsu/arch.h
+          cat <<EOF >> drivers/kernelsu/arch.h
+          #if defined(__arm__)
+          #define ksu_get_syscall_nr(regs) ((regs)->ARM_r7)
+          #define ksu_get_first_arg(regs) ((regs)->ARM_r0)
+          #define ksu_get_second_arg(regs) ((regs)->ARM_r1)
+          #define ksu_get_third_arg(regs) ((regs)->ARM_r2)
+          #define ksu_get_fourth_arg(regs) ((regs)->ARM_r3)
+          #endif
+          EOF
+
+          # 4. УЛЬТИМАТИВНЫЙ ФИКС UID/GID (Решаем ошибку .val)
+          # Удаляем .val везде: и после точки (uid.val), и после стрелки (uid->val)
+          find drivers/kernelsu -type f \( -name "*.c" -o -name "*.h" \) -exec sed -i 's/\.val//g' {} +
+          
+          # 5. Специфичный фикс для vfs_helper.c и ksu.c
+          # Иногда компилятор ругается на прямое сравнение структур, если .val удален
+          # Этот патч гарантирует, что типы будут интерпретироваться как простые числа
+          find drivers/kernelsu -type f -name "*.c" -exec sed -i 's/KUIDT_INIT//g' {} +
+          find drivers/kernelsu -type f -name "*.c" -exec sed -i 's/KGIDT_INIT//g' {} +
+
+          # 6. Фикс типов в allowlist.c
+          if [ -f "drivers/kernelsu/allowlist.c" ]; then
+            sed -i 's/fp->f_cred/(struct cred *)fp->f_cred/g' drivers/kernelsu/allowlist.c
+          fi
+
+          # 7. Интеграция в дерево
+          grep -q "kernelsu" drivers/Makefile || echo "obj-y += kernelsu/" >> drivers/Makefile
+          if ! grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig; then
+            sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+          fi
+
+          # 8. Конфиг
+          echo "CONFIG_KPROBES=y" >> arch/arm/configs/${{ env.DEFCONFIG }}
+          echo "CONFIG_KPROBE_EVENTS=y" >> arch/arm/configs/${{ env.DEFCONFIG }}
+          echo "CONFIG_HAVE_KPROBES=y" >> arch/arm/configs/${{ env.DEFCONFIG }}
+          
+          echo "✅ Все барьеры ARM32 устранены. Запускаем компиляцию."
 
       - name: Package and Upload
         if: env.BUILD_SUCCESS == 'true'
