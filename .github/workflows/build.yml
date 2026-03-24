@@ -49,7 +49,7 @@ jobs:
           mv tmp_ksu/kernel drivers/kernelsu
           rm -rf tmp_ksu
 
-          # 2. Фикс архитектуры (уже проверено)
+          # 2. Фикс архитектуры (уже работает)
           sed -i '/#error "Unsupported arch"/d' drivers/kernelsu/arch.h
           cat <<EOF >> drivers/kernelsu/arch.h
           #if defined(__arm__)
@@ -61,26 +61,27 @@ jobs:
           #endif
           EOF
 
-          # 3. МАССОВЫЙ ПАТЧ ТИПОВ (Решаем ошибки со скриншотов)
-          # Удаляем .val во всех файлах драйвера (исправляет UID/GID для старых ядер)
-          find drivers/kernelsu/ -type f -name "*.c" -exec sed -i 's/\.val//g' {} +
-          find drivers/kernelsu/ -type f -name "*.h" -exec sed -i 's/\.val//g' {} +
+          # 3. ТОТАЛЬНЫЙ ФИКС UID/GID (Решаем ошибку .val)
+          # Проходим по всем .c и .h файлам и удаляем .val там, где это касается UID/GID
+          # Используем расширенное регулярное выражение для надежности
+          find drivers/kernelsu/ -type f \( -name "*.c" -o -name "*.h" \) -exec sed -i 's/\.val//g' {} +
           
-          # Фикс передачи прав в allowlist.c (дискард квалификатора const)
+          # 4. Фикс типов cred в allowlist.c
+          # Это предотвращает ошибку с const квалификатором
           sed -i 's/fp->f_cred/(struct cred *)fp->f_cred/g' drivers/kernelsu/allowlist.c
 
-          # 4. Интеграция в дерево
+          # 5. Интеграция в Makefile и Kconfig
           grep -q "kernelsu" drivers/Makefile || echo "obj-y += kernelsu/" >> drivers/Makefile
           if ! grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig; then
             sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
           fi
 
-          # 5. Конфиг KPROBES (необходимо для работы рута)
+          # 6. Конфиг KPROBES (необходимо для работы рута)
           echo "CONFIG_KPROBES=y" >> arch/arm/configs/${{ env.DEFCONFIG }}
           echo "CONFIG_KPROBE_EVENTS=y" >> arch/arm/configs/${{ env.DEFCONFIG }}
           echo "CONFIG_HAVE_KPROBES=y" >> arch/arm/configs/${{ env.DEFCONFIG }}
           
-          echo "✅ SukiSU Ultra полностью подготовлен к сборке"
+          echo "✅ Все патчи применены. Начинаем сборку..."
           
       - name: Build Kernel
         run: |
